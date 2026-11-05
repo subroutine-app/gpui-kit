@@ -29,9 +29,9 @@ div()
 | 预设 | 背景 | 填充 | 边缘 |
 | --- | --- | --- | --- |
 | `GlassPreset::Frosted`（默认） | `frosted_blur`，24px | 表面颜色，覆盖度 `frosted_opacity`，75% | 细线 |
-| `GlassPreset::Liquid` | `liquid_blur`，8px | 表面颜色，覆盖度 `liquid_opacity`，35%，顶部带白色光泽 | 细线，加一圈顶部更亮的白色光边 |
+| `GlassPreset::Liquid` | `liquid_blur`，8px | 表面颜色，覆盖度 `liquid_opacity`，35% | 半强度细线，顶部一像素淡白色高光 |
 
-Liquid 只是近似效果。这里没有折射、透镜变形、色散或高光照明：渲染器只能模糊。光边和光泽用来暗示受光的边缘，并不会弯折背景。承载正文阅读的表面请用 Frosted；小型控件，或需要透出更多背景的表面可以用 Liquid。
+Liquid 只是近似效果。这里没有折射、透镜变形、色散或高光照明：渲染器只能模糊。顶部高光用来暗示受光的边缘，并不会弯折背景。承载正文阅读的表面请用 Frosted；小型控件，或需要透出更多背景的表面可以用 Liquid。
 
 `Glass::blur(px(..))` 可以为单个表面覆盖预设的模糊半径。
 
@@ -86,7 +86,7 @@ Theme::update(cx, |theme| theme.glass.reduce_transparency = true);
 | `liquid_blur` | `px(8.)` | Liquid 的背景模糊半径 |
 | `frosted_opacity` | `0.75` | Frosted 模糊之上表面颜色的覆盖度 |
 | `liquid_opacity` | `0.35` | Liquid 模糊之上表面颜色的覆盖度 |
-| `rim_opacity` | `0.45` | Liquid 白色光边的不透明度；光泽约使用其三分之一 |
+| `rim_opacity` | `0.14` | Liquid 顶部白色高光的不透明度 |
 | `reduce_transparency` | `false` | 所有玻璃都使用不透明着色填充 |
 | `popover` | `None` | 弹出表面通过 `popover_glass_style` 使用的预设 |
 

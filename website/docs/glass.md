@@ -29,9 +29,9 @@ The story gallery's **Glass** page shows every preset and surface over busy cont
 | Preset | Backdrop | Fill | Edge |
 | --- | --- | --- | --- |
 | `GlassPreset::Frosted` (default) | `frosted_blur`, 24px | Surface color at `frosted_opacity`, 75% | Hairline |
-| `GlassPreset::Liquid` | `liquid_blur`, 8px | Surface color at `liquid_opacity`, 35%, with a white sheen at the top | Hairline plus a white rim, brighter along the top |
+| `GlassPreset::Liquid` | `liquid_blur`, 8px | Surface color at `liquid_opacity`, 35% | A half-strength hairline and a faint one-pixel white highlight along the top |
 
-Liquid is an approximation. There is no refraction, lensing, color dispersion, or specular lighting: the renderer only blurs. The rim and sheen suggest a lit edge; they do not bend the backdrop. Choose Frosted for anything that carries reading text, and Liquid for small controls or surfaces where seeing more of the backdrop matters.
+Liquid is an approximation. There is no refraction, lensing, color dispersion, or specular lighting: the renderer only blurs. The top highlight suggests a lit edge; they do not bend the backdrop. Choose Frosted for anything that carries reading text, and Liquid for small controls or surfaces where seeing more of the backdrop matters.
 
 `Glass::blur(px(..))` overrides the preset's blur radius for one surface.
 
@@ -86,7 +86,7 @@ The backdrop blur comes from the GPUI backend vendored in this repository (see `
 | `liquid_blur` | `px(8.)` | Liquid backdrop blur radius |
 | `frosted_opacity` | `0.75` | Share of the surface color over Frosted's blur |
 | `liquid_opacity` | `0.35` | Share of the surface color over Liquid's blur |
-| `rim_opacity` | `0.45` | Opacity of Liquid's white rim; the sheen uses about a third of it |
+| `rim_opacity` | `0.14` | Opacity of Liquid's white highlight along the top edge |
 | `reduce_transparency` | `false` | Opaque tinted fill everywhere |
 | `popover` | `None` | The preset popup surfaces use with `popover_glass_style` |
 

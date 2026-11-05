@@ -18,8 +18,8 @@
 //!
 //! The material is a backdrop blur under a translucent fill, nothing more.
 //! There is no refraction, lensing, dispersion or specular lighting:
-//! [`GlassPreset::Liquid`] suggests a lit edge with a white rim and sheen
-//! painted over a lighter blur.
+//! [`GlassPreset::Liquid`] suggests a lit edge with a faint highlight along
+//! its top, painted over a lighter blur.
 //!
 //! # Where there is no backdrop
 //!
@@ -34,9 +34,7 @@
 //! `.shadow(..)` or `.bg(..)` after `.glass(..)` replaces part of the
 //! material.
 
-use gpui::{
-    App, Background, BoxShadow, Hsla, Pixels, Rgba, Styled, linear_color_stop, linear_gradient, px,
-};
+use gpui::{App, BoxShadow, Hsla, Pixels, Rgba, Styled, px};
 
 use crate::{
     ActiveTheme as _, GlassTokens, Theme, ThemeStyled as _,
@@ -52,10 +50,9 @@ const BODY_TEXT_CONTRAST: f32 = 4.5;
 /// Width of the ring a focused glass surface draws inside its edge.
 const FOCUS_EDGE_WIDTH: Pixels = px(2.);
 
-/// The share of [`GlassTokens::rim_opacity`] Liquid spends on the sheen at
-/// its top edge, which fades out by [`SHEEN_EXTENT`] of its height.
-const SHEEN_SHARE: f32 = 0.35;
-const SHEEN_EXTENT: f32 = 0.6;
+/// How much of the edge color Liquid's hairline keeps. Its fill is thin, so a
+/// full-strength edge reads as an outline drawn around the glass.
+const LIQUID_EDGE_SHARE: f32 = 0.5;
 
 /// What a glass surface is made of.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
@@ -64,8 +61,9 @@ pub enum GlassPreset {
     /// that lets color and movement through.
     #[default]
     Frosted,
-    /// A light blur under a thin fill, with a white rim and sheen standing in
-    /// for a lit edge. Shows more of the backdrop than Frosted.
+    /// A light blur under a thin fill, with a faint highlight along the top
+    /// edge standing in for a lit edge. Shows more of the backdrop than
+    /// Frosted.
     Liquid,
 }
 
@@ -287,14 +285,15 @@ impl Glass {
             shadows.push(inner_ring(theme.ring, FOCUS_EDGE_WIDTH));
         } else if self.surface.has_edge() {
             if liquid {
-                shadows.extend(rim(tokens.rim_opacity));
+                shadows.push(top_highlight(tokens.rim_opacity));
+                shadows.push(inner_ring(edge.opacity(LIQUID_EDGE_SHARE), px(1.)));
+            } else {
+                shadows.push(inner_ring(edge, px(1.)));
             }
-            shadows.push(inner_ring(edge, px(1.)));
         }
 
         GlassLook {
             fill,
-            sheen: liquid.then_some(tokens.rim_opacity * SHEEN_SHARE),
             foreground,
             shadows,
             blur: translucent.then(|| self.blur.unwrap_or_else(|| self.preset.blur(tokens))),
@@ -305,20 +304,9 @@ impl Glass {
 /// A glass material resolved against a theme.
 struct GlassLook {
     fill: Hsla,
-    /// The opacity of the white laid over the fill's top edge.
-    sheen: Option<f32>,
     foreground: Hsla,
     shadows: Vec<BoxShadow>,
     blur: Option<Pixels>,
-}
-
-impl GlassLook {
-    fn background(&self) -> Background {
-        match self.sheen {
-            Some(opacity) => sheen(self.fill, opacity),
-            None => self.fill.into(),
-        }
-    }
 }
 
 /// Glass surfaces for any styled element.
@@ -342,7 +330,7 @@ impl<T: Styled + Sized> GlassStyled for T {
     fn glass(self, glass: Glass, cx: &App) -> Self {
         let look = glass.look(cx.theme(), popover_ring(cx));
         backdrop(
-            self.bg(look.background())
+            self.bg(look.fill)
                 .text_color(look.foreground)
                 .shadow(look.shadows),
             look.blur,
@@ -380,25 +368,10 @@ fn inner_ring(color: Hsla, width: Pixels) -> BoxShadow {
         .inset()
 }
 
-/// Liquid's lit edge: a white band just inside the hairline, brighter along
-/// the top. Painted before the hairline, which keeps the outermost pixel.
-fn rim(opacity: f32) -> [BoxShadow; 2] {
-    let light = gpui::white();
-    [
-        inner_ring(light.alpha(opacity * 0.5), px(2.)),
-        BoxShadow::new(px(0.), px(2.), light.alpha(opacity)).inset(),
-    ]
-}
-
-/// `fill` with white laid over its top edge at `opacity`, fading out down
-/// the surface.
-fn sheen(fill: Hsla, opacity: f32) -> Background {
-    let top = over(gpui::white().alpha(opacity).to_rgb(), fill.to_rgb());
-    linear_gradient(
-        180.,
-        linear_color_stop(top, 0.),
-        linear_color_stop(fill, SHEEN_EXTENT),
-    )
+/// Liquid's lit edge: a one-pixel line of white along the top, inside the
+/// hairline.
+fn top_highlight(opacity: f32) -> BoxShadow {
+    BoxShadow::new(px(0.), px(1.), gpui::white().alpha(opacity)).inset()
 }
 
 /// The smallest share of an opaque `tint` over a black or white backdrop that
@@ -446,21 +419,6 @@ fn coverage_against(foreground: f32, tint: Rgba, backdrop: Rgba) -> f32 {
         }
     }
     legible_at
-}
-
-/// `top` composited over `bottom`, both with straight alpha.
-fn over(top: Rgba, bottom: Rgba) -> Rgba {
-    let a = top.a + bottom.a * (1. - top.a);
-    if a <= 0. {
-        return bottom;
-    }
-    let channel = |t: f32, b: f32| (t * top.a + b * bottom.a * (1. - top.a)) / a;
-    Rgba {
-        r: channel(top.r, bottom.r),
-        g: channel(top.g, bottom.g),
-        b: channel(top.b, bottom.b),
-        a,
-    }
 }
 
 /// `color` at `coverage` over an opaque `backdrop`, blended per sRGB channel
@@ -541,7 +499,6 @@ mod tests {
                 .look(&theme, theme.foreground.alpha(0.1));
             assert_eq!(look.blur, None);
             assert_eq!(look.fill, theme.primary.alpha(1.));
-            assert_eq!(look.sheen, None);
         }
     }
 }

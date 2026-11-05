@@ -5,7 +5,7 @@ use gpui::{
 };
 
 use crate::{
-    ActiveTheme as _, AxisExt as _, Disableable, Icon, IconName, Sizable as _,
+    ActiveTheme as _, AxisExt as _, Disableable, Icon, IconName, Sizable, Size,
     button::{Button, ButtonVariants as _},
     h_flex,
     label::Label,
@@ -48,6 +48,7 @@ pub struct SettingRow {
     keywords: Vec<SharedString>,
     layout: Axis,
     label_width: Option<AbsoluteLength>,
+    size: Size,
     disabled: bool,
 }
 
@@ -64,6 +65,7 @@ impl SettingRow {
             keywords: Vec::new(),
             layout: Axis::Horizontal,
             label_width: None,
+            size: Size::Small,
             disabled: false,
         }
     }
@@ -103,7 +105,9 @@ impl SettingRow {
         self
     }
 
-    /// The trailing switch, named after the row's label.
+    /// The trailing switch, named after the row's label and drawn at the
+    /// row's [size](Sizable), small by default so a list of settings stays
+    /// compact.
     ///
     /// A disabled row disables the switch, so it installs no click handler.
     pub fn switch(mut self, switch: Switch) -> Self {
@@ -203,6 +207,15 @@ impl SettingRow {
     }
 }
 
+impl Sizable for SettingRow {
+    /// The size of a switch given through [`SettingRow::switch`]. A control
+    /// given through [`SettingRow::control`] keeps its own size.
+    fn with_size(mut self, size: impl Into<Size>) -> Self {
+        self.size = size.into();
+        self
+    }
+}
+
 impl Disableable for SettingRow {
     /// Dim the row. A switch given through [`SettingRow::switch`] is disabled
     /// with it; a control given through [`SettingRow::control`] is the
@@ -226,6 +239,7 @@ impl RenderOnce for SettingRow {
             Some(RowControl::Element(control)) => Some(control),
             Some(RowControl::Switch(switch)) => Some(
                 switch
+                    .with_size(self.size)
                     .accessibility_label(self.label.clone())
                     .when(self.disabled, |this| this.disabled(true))
                     .into_any_element(),

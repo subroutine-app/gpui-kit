@@ -20,8 +20,8 @@ pub struct GlassTokens {
     /// How much of the surface color [`GlassPreset::Liquid`] lays over its
     /// blurred backdrop, from 0 (none) to 1 (opaque).
     pub liquid_opacity: f32,
-    /// Opacity of the white rim and sheen that [`GlassPreset::Liquid`] uses to
-    /// suggest a lit edge.
+    /// Opacity of the white highlight along the top edge that
+    /// [`GlassPreset::Liquid`] uses to suggest a lit edge.
     pub rim_opacity: f32,
     /// Paint every glass surface as its opaque tinted fill, without a
     /// backdrop blur.
@@ -42,7 +42,7 @@ impl Default for GlassTokens {
             liquid_blur: px(8.),
             frosted_opacity: 0.75,
             liquid_opacity: 0.35,
-            rim_opacity: 0.45,
+            rim_opacity: 0.14,
             reduce_transparency: false,
             popover: None,
         }
