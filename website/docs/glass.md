@@ -33,7 +33,7 @@ The story gallery's **Glass** page shows every preset and surface over busy cont
 
 Liquid is an approximation. There is no refraction, lensing, color dispersion, or specular lighting: the renderer only blurs. The top highlight suggests a lit edge; they do not bend the backdrop. Choose Frosted for anything that carries reading text, and Liquid for small controls or surfaces where seeing more of the backdrop matters.
 
-`Glass::blur(px(..))` overrides the preset's blur radius for one surface.
+`Glass::blur(px(..))` overrides the preset's blur radius for one surface, and `Glass::opacity(..)` overrides how much of the fill covers the blur, for a surface whose content needs a quieter backdrop than its preset gives.
 
 ## Surfaces
 

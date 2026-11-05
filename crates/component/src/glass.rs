@@ -165,6 +165,7 @@ pub struct Glass {
     tint: Option<Hsla>,
     elevation: Option<GlassElevation>,
     blur: Option<Pixels>,
+    opacity: Option<f32>,
     focused: bool,
     protect_text_contrast: bool,
 }
@@ -183,6 +184,7 @@ impl Glass {
             tint: None,
             elevation: None,
             blur: None,
+            opacity: None,
             focused: false,
             protect_text_contrast: true,
         }
@@ -233,6 +235,17 @@ impl Glass {
         self
     }
 
+    /// Override how much of the fill covers the blurred backdrop, from 0
+    /// (none) to 1 (opaque), in place of the preset's share.
+    ///
+    /// For glass whose content needs a quieter backdrop than its preset gives,
+    /// such as a large panel of controls. The tint's alpha still scales it,
+    /// and text-contrast protection can still raise it.
+    pub fn opacity(mut self, opacity: f32) -> Self {
+        self.opacity = Some(opacity.clamp(0., 1.));
+        self
+    }
+
     /// Draw the keyboard focus ring inside the edge, in the theme's `ring`
     /// color.
     ///
@@ -263,7 +276,10 @@ impl Glass {
         let translucent = BACKDROP_FILTER && !tokens.reduce_transparency;
 
         let coverage = if translucent {
-            let preset = (self.preset.opacity(tokens) * tint.a).clamp(0., 1.);
+            let opacity = self
+                .opacity
+                .unwrap_or_else(|| self.preset.opacity(tokens));
+            let preset = (opacity * tint.a).clamp(0., 1.);
             if self.protect_text_contrast {
                 preset.max(legible_coverage(foreground, opaque_tint))
             } else {
