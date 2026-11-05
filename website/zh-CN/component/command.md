@@ -268,7 +268,7 @@ Command::new(&state).scroll_bounce(true)
 | `header` | `header<F, E>(F) -> Self`，其中 `F: Fn(&CommandState, &mut Window, &mut App) -> E + 'static`、`E: IntoElement`；渲染在搜索框和列表之上。 |
 | `footer` | `footer<F, E>(F) -> Self`，使用相同的回调约束；渲染在列表之下。 |
 
-`Command` 实现了 [`Styled`]，因此 `w`、`max_w`、`bg` 和其他样式可作用于面板外框。条目行的圆角与外框同心：外框自身的内边距也计入行与外框角之间的距离。
+`Command` 实现了 [`Styled`]，因此 `w`、`max_w`、`bg` 和其他样式可作用于面板外框。条目行的圆角与外框同心：外框自身的内边距也计入行与外框角之间的距离。外框的绝对内边距会内缩标题区、搜索框和底部区域，而列表会一直滚动到外框边缘，并把这段内边距作为滚动内边距保留，滚动条位于由此留出的边槽中。
 
 ## CommandItem
 

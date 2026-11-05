@@ -319,7 +319,10 @@ with precise pixel scrolling, such as a trackpad or Magic Mouse on macOS, as
 
 `Command` implements [`Styled`], so `w`, `max_w`, `bg`, and other styles apply
 to the palette frame. Item rows stay concentric with the frame: its own padding
-counts toward the distance between a row and the frame's corner.
+counts toward the distance between a row and the frame's corner. The frame's
+absolute padding insets the header, search field and footer, but the list
+scrolls to the frame's edges and keeps that padding as scroll padding, with the
+scrollbar in the gutter it leaves.
 
 ## CommandItem
 

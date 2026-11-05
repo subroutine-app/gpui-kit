@@ -3,7 +3,7 @@ use std::rc::Rc;
 
 use gpui::{
     AbsoluteLength, AnyElement, App, AppContext as _, AvailableSpace, Context, DefiniteLength,
-    Entity, FocusHandle, Focusable, FontFallbacks, FontFeatures, FontStyle, FontWeight,
+    Edges, Entity, FocusHandle, Focusable, FontFallbacks, FontFeatures, FontStyle, FontWeight,
     InteractiveElement, IntoElement, KeyBinding, Keystroke, ListSizingBehavior, ParentElement,
     Pixels, Render, Role, ScrollStrategy, SharedString, Size, StatefulInteractiveElement as _,
     StyleRefinement, Styled, Subscription, TextOverflow, WhiteSpace, Window, div,
@@ -703,6 +703,42 @@ impl CommandState {
         });
     }
 
+    /// The frame's absolute padding. It is laid inside the frame's regions
+    /// rather than around them, so that the list scrolls under the frame's
+    /// edges and carries the padding as scroll padding. Relative padding stays
+    /// on the frame.
+    fn frame_inset(&self, rem_size: Pixels) -> Edges<Pixels> {
+        let padding = &self.options.style.padding;
+        let resolve = |edge: Option<DefiniteLength>| match edge {
+            Some(DefiniteLength::Absolute(length)) => length.to_pixels(rem_size),
+            _ => px(0.),
+        };
+        Edges {
+            top: resolve(padding.top),
+            right: resolve(padding.right),
+            bottom: resolve(padding.bottom),
+            left: resolve(padding.left),
+        }
+    }
+
+    /// The caller's frame style without the padding [`Self::frame_inset`]
+    /// moves inside.
+    fn frame_style(&self) -> StyleRefinement {
+        let mut style = self.options.style.clone();
+        let padding = &mut style.padding;
+        for edge in [
+            &mut padding.top,
+            &mut padding.right,
+            &mut padding.bottom,
+            &mut padding.left,
+        ] {
+            if matches!(edge, Some(DefiniteLength::Absolute(_))) {
+                *edge = None;
+            }
+        }
+        style
+    }
+
     /// Row corner radius, following the frame: the frame's own padding and the
     /// list's `p_1` (plus the border when bordered) sit between a row and the
     /// frame's corner. A borderless command without its own radius keeps the
@@ -719,10 +755,7 @@ impl CommandState {
             (false, Some(radius)) => (radius.to_pixels(rem_size), px(0.)),
             (false, None) => return theme.radius,
         };
-        let padding = match self.options.style.padding.left {
-            Some(DefiniteLength::Absolute(padding)) => padding.to_pixels(rem_size),
-            _ => px(0.),
-        };
+        let padding = self.frame_inset(rem_size).left;
         nested_radius(outer, padding + rem_size * 0.25 + border)
     }
 
@@ -933,6 +966,14 @@ impl Render for CommandState {
         let rows_count = self.rows.len();
         let row_sizes = self.row_sizes.clone();
         let command_state = cx.entity();
+        let regions = FrameRegions::new(
+            self.frame_inset(window.rem_size()),
+            self.options.header.is_some(),
+            self.model.searchable,
+            self.options.footer.is_some(),
+        );
+        let quarter_rem = window.rem_size() * 0.25;
+        let list_padding = regions.list.map(|edge| *edge + quarter_rem);
 
         v_flex()
             .id("command")
@@ -952,27 +993,32 @@ impl Render for CommandState {
                     .border_1()
                     .border_color(cx.theme().border)
             })
-            .refine_style(&self.options.style)
+            .refine_style(&self.frame_style())
             .when_some(self.options.header.as_ref(), |this, header| {
-                this.child(header(self, window, cx))
+                this.child(
+                    div()
+                        .paddings(regions.header)
+                        .child(header(self, window, cx)),
+                )
             })
             .when(self.model.searchable, |this| {
                 this.child(
-                    div()
-                        .flex_none()
-                        .px_3()
-                        .border_b_1()
-                        .border_color(cx.theme().border)
-                        .child(
-                            Input::new(&self.query_input)
-                                .with_size(self.options.size)
-                                .prefix(
-                                    Icon::new(IconName::Search)
-                                        .text_color(cx.theme().muted_foreground),
-                                )
-                                .appearance(false)
-                                .p_0(),
-                        ),
+                    div().flex_none().paddings(regions.search).child(
+                        div()
+                            .px_3()
+                            .border_b_1()
+                            .border_color(cx.theme().border)
+                            .child(
+                                Input::new(&self.query_input)
+                                    .with_size(self.options.size)
+                                    .prefix(
+                                        Icon::new(IconName::Search)
+                                            .text_color(cx.theme().muted_foreground),
+                                    )
+                                    .appearance(false)
+                                    .p_0(),
+                            ),
+                    ),
                 )
             })
             .child(
@@ -981,25 +1027,31 @@ impl Render for CommandState {
                     .role(Role::ListBox)
                     .relative()
                     .flex_1()
-                    // The rows carry their inset on the virtual list itself so
-                    // that a mid-scroll clip edge sits flush against the
-                    // surrounding dividers; only the empty slot needs the
-                    // container padding, and only while it is shown, so a
-                    // loading list leaves no blank strip under the query.
-                    .when(rows_count == 0 && !self.loading, |this| this.p_1())
+                    // The list reaches the frame's edges, and the rows carry
+                    // the frame's inset on the virtual list itself, so that a
+                    // mid-scroll clip edge sits flush against the surrounding
+                    // dividers and the frame. Without rows only the frame's
+                    // inset remains, and the empty slot adds the rows' own.
+                    .when(rows_count == 0, |this| {
+                        this.paddings(if self.loading {
+                            regions.list
+                        } else {
+                            list_padding
+                        })
+                    })
                     .on_prepaint({
                         let measure_state = command_state.clone();
                         move |bounds, window, cx| {
                             measure_state.update(cx, |state, cx| {
-                                // The list's `p_1` is one quarter rem on each
-                                // side. Its rem-dependent padding and inherited
-                                // layout-relevant text style participate in
-                                // the row-size cache key.
+                                // The list's padding depends on the rem size.
+                                // It and the inherited layout-relevant text
+                                // style participate in the row-size cache key.
                                 let text_style = window.text_style();
                                 state.set_list_measurement_key(
                                     ListMeasurementKey {
                                         content_width: (bounds.size.width
-                                            - window.rem_size() * 0.5)
+                                            - list_padding.left
+                                            - list_padding.right)
                                             .max(px(0.)),
                                         rem_size: window.rem_size(),
                                         line_height: window.line_height(),
@@ -1044,7 +1096,7 @@ impl Render for CommandState {
                             // scroll-padding: the scroll ends keep their inset
                             // while scrolled-under rows paint and clip at the
                             // list edge.
-                            .p_1()
+                            .paddings(list_padding)
                             .with_sizing_behavior(ListSizingBehavior::Infer)
                             .track_scroll(&self.scroll_handle)
                             .map(|list| {
@@ -1058,12 +1110,66 @@ impl Render for CommandState {
                                 })
                             }),
                         )
-                        .child(Scrollbar::vertical(&self.scroll_handle))
+                        // Sized by the container rather than by the scroll
+                        // handle, whose bounds move with the bounce, so the bar
+                        // holds still in the frame's gutter beside the rows.
+                        // Its track stops at the frame's inset, which keeps the
+                        // thumb in line with the first and last rows and clear
+                        // of the frame's corners.
+                        .child(
+                            Scrollbar::vertical(&self.scroll_handle)
+                                .viewport_from_layout()
+                                .track_inset(Edges {
+                                    top: regions.list.top,
+                                    bottom: regions.list.bottom,
+                                    ..Edges::default()
+                                }),
+                        )
                     }),
             )
             .when_some(self.options.footer.as_ref(), |this, footer| {
-                this.child(footer(self, window, cx))
+                this.child(
+                    div()
+                        .paddings(regions.footer)
+                        .child(footer(self, window, cx)),
+                )
             })
+    }
+}
+
+/// Where the frame's inset lands: every region takes the sides, the first
+/// region the top and the last the bottom.
+struct FrameRegions {
+    header: Edges<Pixels>,
+    search: Edges<Pixels>,
+    list: Edges<Pixels>,
+    footer: Edges<Pixels>,
+}
+
+impl FrameRegions {
+    fn new(inset: Edges<Pixels>, header: bool, search: bool, footer: bool) -> Self {
+        let sides = Edges {
+            top: px(0.),
+            bottom: px(0.),
+            ..inset
+        };
+        let first = Edges {
+            top: inset.top,
+            ..sides
+        };
+        Self {
+            header: first,
+            search: if header { sides } else { first },
+            list: Edges {
+                top: if header || search { px(0.) } else { inset.top },
+                bottom: if footer { px(0.) } else { inset.bottom },
+                ..sides
+            },
+            footer: Edges {
+                bottom: inset.bottom,
+                ..sides
+            },
+        }
     }
 }
 
