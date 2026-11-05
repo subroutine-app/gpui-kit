@@ -2,17 +2,18 @@ use gpui_base::TestSupportExt as _;
 use std::rc::Rc;
 
 use gpui::{
-    AbsoluteLength, AnyElement, App, AppContext as _, AvailableSpace, Context, Entity, FocusHandle,
-    Focusable, FontFallbacks, FontFeatures, FontStyle, FontWeight, InteractiveElement, IntoElement,
-    KeyBinding, Keystroke, ListSizingBehavior, ParentElement, Pixels, Render, Role, ScrollStrategy,
-    SharedString, Size, StatefulInteractiveElement as _, StyleRefinement, Styled, Subscription,
-    TextOverflow, WhiteSpace, Window, div, prelude::FluentBuilder as _, px, size,
+    AbsoluteLength, AnyElement, App, AppContext as _, AvailableSpace, Context, DefiniteLength,
+    Entity, FocusHandle, Focusable, FontFallbacks, FontFeatures, FontStyle, FontWeight,
+    InteractiveElement, IntoElement, KeyBinding, Keystroke, ListSizingBehavior, ParentElement,
+    Pixels, Render, Role, ScrollStrategy, SharedString, Size, StatefulInteractiveElement as _,
+    StyleRefinement, Styled, Subscription, TextOverflow, WhiteSpace, Window, div,
+    prelude::FluentBuilder as _, px, size,
 };
 use rust_i18n::t;
 
 use crate::{
-    ActiveTheme as _, ElementExt as _, Icon, IconName, IndexPath, StyledExt as _,
-    VirtualListScrollHandle,
+    ActiveTheme as _, ElementExt as _, Icon, IconName, IndexPath, Sizable as _, StyleSized as _,
+    StyledExt as _, VirtualListScrollHandle,
     actions::{Cancel, Confirm, SelectDown, SelectUp},
     command::{
         command::CommandOptions,
@@ -174,7 +175,7 @@ impl CommandState {
 
     /// Apply the presentation of the latest [`crate::command::Command`] render.
     pub(crate) fn set_options(&mut self, options: CommandOptions) {
-        if self.options.style.text != options.style.text {
+        if self.options.style.text != options.style.text || self.options.size != options.size {
             self.needs_measure = true;
         }
         self.options = options;
@@ -702,10 +703,10 @@ impl CommandState {
         });
     }
 
-    /// Row corner radius, following the frame: the list's `p_1` (plus the
-    /// border when bordered) sits between a row and the frame's corner. A
-    /// borderless command without its own radius keeps the theme radius, since
-    /// its frame belongs to the host.
+    /// Row corner radius, following the frame: the frame's own padding and the
+    /// list's `p_1` (plus the border when bordered) sit between a row and the
+    /// frame's corner. A borderless command without its own radius keeps the
+    /// theme radius, since its frame belongs to the host.
     fn item_radius(&self, window: &Window, cx: &App) -> Pixels {
         let theme = cx.theme();
         let rem_size = window.rem_size();
@@ -718,21 +719,28 @@ impl CommandState {
             (false, Some(radius)) => (radius.to_pixels(rem_size), px(0.)),
             (false, None) => return theme.radius,
         };
-        nested_radius(outer, rem_size * 0.25 + border)
+        let padding = match self.options.style.padding.left {
+            Some(DefiniteLength::Absolute(padding)) => padding.to_pixels(rem_size),
+            _ => px(0.),
+        };
+        nested_radius(outer, padding + rem_size * 0.25 + border)
     }
 
     /// The frame every item row shares, so that the measured height matches the
     /// rendered one.
     fn item_row(&self, selected: bool, window: &Window, cx: &App) -> gpui::Div {
+        let size = self.options.size;
         div()
             .flex()
             .flex_row()
             .items_center()
             .w_full()
             .gap_2()
-            .px_2()
-            .py_1p5()
-            .text_sm()
+            .map(|this| match size {
+                crate::Size::Large => this.px_3().py_2(),
+                _ => this.px_2().py_1p5(),
+            })
+            .input_text_size(size)
             .rounded(self.item_radius(window, cx))
             .when(selected, |this| {
                 this.bg(cx.theme().accent)
@@ -743,9 +751,10 @@ impl CommandState {
     fn heading_row(&self, heading: SharedString, cx: &App) -> gpui::Div {
         div()
             .w_full()
-            .px_2()
-            .py_1p5()
-            .text_xs()
+            .map(|this| match self.options.size {
+                crate::Size::Large => this.px_3().pt_2p5().pb_1().text_sm(),
+                _ => this.px_2().py_1p5().text_xs(),
+            })
             .font_medium()
             .text_color(cx.theme().muted_foreground)
             .child(heading)
@@ -956,6 +965,7 @@ impl Render for CommandState {
                         .border_color(cx.theme().border)
                         .child(
                             Input::new(&self.query_input)
+                                .with_size(self.options.size)
                                 .prefix(
                                     Icon::new(IconName::Search)
                                         .text_color(cx.theme().muted_foreground),
@@ -1249,6 +1259,33 @@ mod tests {
                 .on_children_prepainted(move |bounds, _, _| width.set(Some(bounds[0].size.width)))
                 .child(item)
         }
+    }
+
+    #[gpui::test]
+    fn rows_stay_concentric_inside_a_padded_frame(cx: &mut TestAppContext) {
+        use crate::command::command::CommandOptions;
+
+        cx.update(crate::init);
+        let cx = cx.add_empty_window();
+        cx.update(|window, cx| {
+            window.set_rem_size(px(16.));
+            let state = cx.new(|cx| CommandState::new(window, cx));
+            let mut radius_with_padding = |padding: f32| {
+                state.update(cx, |state, cx| {
+                    let mut options = CommandOptions {
+                        bordered: false,
+                        ..CommandOptions::default()
+                    };
+                    options.style.corner_radii.top_left = Some(px(20.).into());
+                    options.style.padding.left = Some(px(padding).into());
+                    state.set_options(options);
+                    state.item_radius(window, cx)
+                })
+            };
+
+            assert_eq!(radius_with_padding(0.), px(16.));
+            assert_eq!(radius_with_padding(8.), px(8.));
+        });
     }
 
     #[gpui::test]

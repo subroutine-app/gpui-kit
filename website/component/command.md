@@ -313,11 +313,13 @@ with precise pixel scrolling, such as a trackpad or Magic Mouse on macOS, as
 | `empty` | `empty<F, E>(F) -> Self` renders custom content when there are no matches. |
 | `max_h` | `max_h(impl Into<DefiniteLength>) -> Self` sets the list maximum. Default: `18.75rem` (300px). |
 | `bordered` | `bordered(bool) -> Self` draws the surrounding border and rounding. Default: `true`. |
+| `with_size` | From [Sizable]: `large()`, `small()` and the rest scale the search field, item rows and group headings together. Default: `Size::Medium`. |
 | `header` | `header<F, E>(F) -> Self`, where `F: Fn(&CommandState, &mut Window, &mut App) -> E + 'static` and `E: IntoElement`; renders above search and list. |
 | `footer` | `footer<F, E>(F) -> Self`, with the same callback bounds; renders below the list. |
 
 `Command` implements [`Styled`], so `w`, `max_w`, `bg`, and other styles apply
-to the palette frame.
+to the palette frame. Item rows stay concentric with the frame: its own padding
+counts toward the distance between a row and the frame's corner.
 
 ## CommandItem
 
@@ -379,3 +381,4 @@ a newly constructed `Command` during rendering.
 [WindowExt::open_dialog]: https://docs.rs/gpui-component/latest/gpui_component/trait.WindowExt.html#tymethod.open_dialog
 [Focusable::focus_handle]: https://docs.rs/gpui/latest/gpui/trait.Focusable.html#tymethod.focus_handle
 [Styled]: https://docs.rs/gpui/latest/gpui/trait.Styled.html
+[Sizable]: https://docs.rs/gpui-component/latest/gpui_component/trait.Sizable.html

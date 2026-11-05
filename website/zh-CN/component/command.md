@@ -264,10 +264,11 @@ Command::new(&state).scroll_bounce(true)
 | `empty` | `empty<F, E>(F) -> Self` 渲染无匹配时的自定义内容。 |
 | `max_h` | `max_h(impl Into<DefiniteLength>) -> Self` 设置列表最大高度。默认：`18.75rem`（300px）。 |
 | `bordered` | `bordered(bool) -> Self` 绘制外边框和圆角。默认：`true`。 |
+| `with_size` | 来自 [Sizable]：`large()`、`small()` 等同时缩放搜索框、条目行和分组标题。默认：`Size::Medium`。 |
 | `header` | `header<F, E>(F) -> Self`，其中 `F: Fn(&CommandState, &mut Window, &mut App) -> E + 'static`、`E: IntoElement`；渲染在搜索框和列表之上。 |
 | `footer` | `footer<F, E>(F) -> Self`，使用相同的回调约束；渲染在列表之下。 |
 
-`Command` 实现了 [`Styled`]，因此 `w`、`max_w`、`bg` 和其他样式可作用于面板外框。
+`Command` 实现了 [`Styled`]，因此 `w`、`max_w`、`bg` 和其他样式可作用于面板外框。条目行的圆角与外框同心：外框自身的内边距也计入行与外框角之间的距离。
 
 ## CommandItem
 
@@ -327,3 +328,4 @@ Command::new(&state).scroll_bounce(true)
 [WindowExt::open_dialog]: https://docs.rs/gpui-component/latest/gpui_component/trait.WindowExt.html#tymethod.open_dialog
 [Focusable::focus_handle]: https://docs.rs/gpui/latest/gpui/trait.Focusable.html#tymethod.focus_handle
 [Styled]: https://docs.rs/gpui/latest/gpui/trait.Styled.html
+[Sizable]: https://docs.rs/gpui-component/latest/gpui_component/trait.Sizable.html

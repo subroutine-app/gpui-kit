@@ -5,11 +5,11 @@ use gpui::{
     StyleRefinement, Styled, Window, rems,
 };
 
-use crate::IndexPath;
 use crate::command::{
     item::{CommandEntry, CommandGroup, CommandItem},
     state::{CommandModel, CommandState, OnCancel, OnIndex, OnQuery},
 };
+use crate::{IndexPath, Sizable, Size};
 
 pub(crate) type CommandSlot = dyn Fn(&CommandState, &mut Window, &mut App) -> AnyElement;
 
@@ -17,6 +17,7 @@ pub(crate) type CommandSlot = dyn Fn(&CommandState, &mut Window, &mut App) -> An
 #[derive(Clone)]
 pub(crate) struct CommandOptions {
     pub(crate) style: StyleRefinement,
+    pub(crate) size: Size,
     pub(crate) placeholder: Option<SharedString>,
     pub(crate) empty: Option<Rc<CommandSlot>>,
     pub(crate) max_h: DefiniteLength,
@@ -30,6 +31,7 @@ impl Default for CommandOptions {
     fn default() -> Self {
         Self {
             style: StyleRefinement::default(),
+            size: Size::default(),
             placeholder: None,
             empty: None,
             max_h: rems(18.75).into(),
@@ -236,6 +238,15 @@ impl Command {
         self.options.footer = Some(Rc::new(move |state, window, cx| {
             f(state, window, cx).into_any_element()
         }));
+        self
+    }
+}
+
+/// Scales the search field, item rows and group headings together. `Large`
+/// suits a palette that is the window's focus, such as a modal command palette.
+impl Sizable for Command {
+    fn with_size(mut self, size: impl Into<Size>) -> Self {
+        self.options.size = size.into();
         self
     }
 }
