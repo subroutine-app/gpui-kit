@@ -53,7 +53,7 @@ const FOCUS_EDGE_WIDTH: Pixels = px(2.);
 
 /// How much of the edge color Liquid's hairline keeps. Its fill is thin, so a
 /// full-strength edge reads as an outline drawn around the glass.
-const LIQUID_EDGE_SHARE: f32 = 0.5;
+const LIQUID_EDGE_SHARE: f32 = 0.75;
 
 /// What a glass surface is made of.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
