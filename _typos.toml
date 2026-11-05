@@ -31,4 +31,4 @@ netwrok = "netwrok"
 workspce = "workspce"
 
 [files]
-extend-exclude = ["crates/story/src/fixtures/", "vendor/"]
+extend-exclude = ["crates/story/src/fixtures/"]

@@ -209,6 +209,7 @@ struct AltState {
     /// held from before.
     just_activated: bool,
     /// Whether any modifier was down at the last change.
+    #[cfg_attr(feature = "gpui-fast", allow(dead_code))]
     any_modifier: bool,
     _settle: Option<Task<()>>,
 }
@@ -342,12 +343,19 @@ impl AppMenuBar {
                 this.on_focus_out(window, cx)
             }),
             cx.observe_window_activation(window, Self::on_window_activation),
-            window.observe_modifiers_changed(move |window, cx| {
-                _ = this.update(cx, |this, cx| this.on_modifiers_changed(window, cx));
-            }),
         ];
+        // GPUI Fast has no window-level modifier observer; there the Alt
+        // underline and tap follow the next key or focus change instead.
+        #[cfg(not(feature = "gpui-fast"))]
+        self._window_subscriptions
+            .push(window.observe_modifiers_changed(move |_, window, cx| {
+                _ = this.update(cx, |this, cx| this.on_modifiers_changed(window, cx));
+            }));
+        #[cfg(feature = "gpui-fast")]
+        let _ = this;
     }
 
+    #[cfg_attr(feature = "gpui-fast", allow(dead_code))]
     fn on_modifiers_changed(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let modifiers = window.modifiers();
         let alt_only = modifiers.alt && modifiers.number_of_modifiers() == 1;

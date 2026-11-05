@@ -74,7 +74,7 @@ Theme::update(cx, |theme| theme.glass.reduce_transparency = true);
 
 When it is set, every glass surface is its opaque tinted fill, with the same edge, elevation, and text color, and no blur.
 
-The backdrop blur comes from the GPUI backend vendored in this repository (see `vendor/README.md`). The same opaque fallback is used under the `gpui-fast` backend, which has no backdrop filter, so code using glass compiles and stays legible on both backends. An application that depends on GPUI Component with the default backend must repeat the vendored `[patch.crates-io]` entries in its own workspace, as `vendor/README.md` describes.
+The backdrop blur comes from the GPUI fork this kit is built on ([subroutine-app/gpui](https://github.com/subroutine-app/gpui), see its `docs/upstream.md`). The same opaque fallback is used under the `gpui-fast` backend, which has no backdrop filter, so code using glass compiles and stays legible on both backends.
 
 ## Tokens
 

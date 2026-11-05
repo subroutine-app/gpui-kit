@@ -1169,7 +1169,7 @@ impl Inline {
             .collect::<Vec<_>>();
         #[cfg(not(feature = "gpui-fast"))]
         let _ = text_layout.paint_foreground_with_colors(&text_colors, window, cx);
-        // The GPUI Fast backend is not vendored and has no recolored paint,
+        // The GPUI Fast backend is not the GPUI fork and has no recolored paint,
         // so there the text keeps its own colors.
         #[cfg(feature = "gpui-fast")]
         let _ = (text_colors, text_layout.paint_foreground(window, cx));

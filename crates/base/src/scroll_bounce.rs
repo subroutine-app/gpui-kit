@@ -686,7 +686,7 @@ impl Element for ScrollBounce {
                 }
                 let before = handle.offset();
                 if matches!(event.delta, ScrollDelta::Lines(_)) {
-                    // The child eases a notch itself, with the vendored GPUI's
+                    // The child eases a notch itself, with the GPUI fork's
                     // wheel transition, and the claim keeps it from the areas
                     // around this one.
                     let displaced = state.overscroll.offset() != 0.;

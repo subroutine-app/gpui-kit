@@ -1006,7 +1006,7 @@ mod rendering {
         }
     }
 
-    /// A content filter from the vendored backend (`vendor/README.md`): an element's painted
+    /// A content filter from the GPUI fork: an element's painted
     /// content fades to transparent across each banded edge and is clipped to its bounds.
     #[cfg(not(feature = "gpui-fast"))]
     struct Faded;

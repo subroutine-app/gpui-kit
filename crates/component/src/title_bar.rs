@@ -109,6 +109,7 @@ impl TitleBar {
             title: None,
             appears_transparent: true,
             traffic_light_position: Some(gpui::point(px(9.0), px(9.0))),
+            ..Default::default()
         }
     }
 

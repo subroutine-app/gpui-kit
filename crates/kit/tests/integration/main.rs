@@ -78,6 +78,6 @@ mod touch_selection;
 mod transitions;
 #[cfg(feature = "test-support")]
 mod window;
-// The vendored backend's additions do not exist in GPUI Fast.
+// The GPUI fork's additions do not exist in GPUI Fast.
 #[cfg(all(feature = "test-support", not(feature = "gpui-fast")))]
 mod vendored_gpui;

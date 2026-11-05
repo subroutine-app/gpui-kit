@@ -1,6 +1,6 @@
 [package]
 name = "scroll_fade"
-description = "Edge-faded scrolling lists with smooth wheel and animated programmatic scrolling, from the vendored GPUI backend."
+description = "Edge-faded scrolling lists with smooth wheel and animated programmatic scrolling, from the GPUI fork."
 version = "0.9.0"
 publish = false
 edition.workspace = true

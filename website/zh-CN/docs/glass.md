@@ -74,7 +74,7 @@ Theme::update(cx, |theme| theme.glass.reduce_transparency = true);
 
 开启后，所有玻璃表面都绘制为不透明的着色填充，保留相同的边缘、层级和文字颜色，不再模糊。
 
-背景模糊来自本仓库内置（vendored）的 GPUI 后端（见 `vendor/README.md`）。`gpui-fast` 后端没有背景滤镜，同样使用这种不透明回退，因此使用玻璃的代码在两种后端下都能编译并保持可读。使用默认后端并依赖 GPUI Component 的应用，必须按 `vendor/README.md` 的说明，在自己的 workspace 中重复这些 `[patch.crates-io]` 条目。
+背景模糊来自本套件所基于的 GPUI 分支（[subroutine-app/gpui](https://github.com/subroutine-app/gpui)，见其 `docs/upstream.md`）。`gpui-fast` 后端没有背景滤镜，同样使用这种不透明回退，因此使用玻璃的代码在两种后端下都能编译并保持可读。
 
 ## Token
 

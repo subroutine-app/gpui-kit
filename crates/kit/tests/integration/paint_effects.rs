@@ -1,4 +1,4 @@
-//! Paint animations, which the vendored GPUI backend adds (see `vendor/README.md`): an element
+//! Paint animations, which Subroutine's GPUI fork adds (see its `docs/upstream.md`): an element
 //! painted with an animated `PaintEffect` changes in each frame while the cached view around it
 //! stays cached. Ported from Mesa Hills Research's GPUI fork.
 use gpui_kit::{

@@ -43,7 +43,6 @@ members = [
     "examples/scroll_fade",
     "crates/shell",
 ]
-exclude = ["vendor"]
 resolver = "2"
 
 [workspace.package]
@@ -61,25 +60,24 @@ gpui-shell = { path = "crates/shell", version = "0.9.0" }
 gpui-webview = { path = "crates/webview", version = "0.9.0" }
 story = { path = "crates/story" }
 
-# GPUI comes from the `gpui-pre-*` snapshots of Zed's crates, and any snapshot
-# may change GPUI's API. These requirements are what the published gpui-kit
-# crates carry to crates.io, so they pin the exact snapshot the release was
-# built against: a caret requirement let the weekly release move applications
-# onto a newer snapshot that gpui-component did not compile with (#3156). Bump
-# every snapshot crate together with its Cargo.lock entry; `script/check-gpui-pin.ts`
-# fails CI when a pin is not exact.
-gpui = { package = "gpui-pre", version = "=0.3.11" }
-gpui_platform = { package = "gpui-pre-platform", version = "=0.3.11", features = ["font-kit", "x11", "wayland", "runtime_shaders"] }
-gpui_web = { package = "gpui-pre-web", version = "=0.3.11" }
+# GPUI comes from Subroutine's GPUI fork (https://github.com/subroutine-app/gpui),
+# a fork of Mesa Hills Research's `mhr-gpui` that follows the `gpui-pre`
+# snapshots (currently 0.3.11, Zed f816e1f) and adds the framework primitives
+# this kit uses: backdrop blur and content filters, edge fades, eased wheel and
+# animated scrolling, held drags, paint animations and native macOS toolbars.
+# Its `docs/upstream.md` lists every change. Bump every crate to the same rev.
+gpui = { package = "mhr-gpui", git = "https://github.com/subroutine-app/gpui", rev = "23ee17142437f8bcec067c4e3bdaa046153df886" }
+gpui_platform = { package = "mhr-gpui-platform", git = "https://github.com/subroutine-app/gpui", rev = "23ee17142437f8bcec067c4e3bdaa046153df886", features = ["font-kit", "x11", "wayland", "runtime_shaders"] }
+gpui_web = { package = "mhr-gpui-web", git = "https://github.com/subroutine-app/gpui", rev = "23ee17142437f8bcec067c4e3bdaa046153df886" }
 # Fast is optional; existing crates select it through their gpui-fast feature.
 # Explicit package fields make Cargo use these dependency keys as Rust crate names;
 # the packages declare the same library names as the pre backend.
 gpui-fast = { package = "gpui-fast", version = "0.1.13", features = ["windows-manifest-provided-by-host"] }
 gpui-fast-platform = { package = "gpui-fast-platform", version = "0.1.13", features = ["font-kit", "x11", "wayland", "runtime_shaders"] }
 gpui-fast-web = { package = "gpui-fast-web", version = "0.1.13" }
-gpui_macros = { package = "gpui-pre-macros", version = "=0.3.11" }
-reqwest_client = { package = "gpui-pre-reqwest-client", version = "=0.3.11" }
-sum-tree = { package = "gpui-pre-sum-tree", version = "=0.3.11" }
+gpui_macros = { package = "mhr-gpui-macros", git = "https://github.com/subroutine-app/gpui", rev = "23ee17142437f8bcec067c4e3bdaa046153df886" }
+reqwest_client = { package = "mhr-reqwest-client", git = "https://github.com/subroutine-app/gpui", rev = "23ee17142437f8bcec067c4e3bdaa046153df886" }
+sum-tree = { package = "mhr-sum-tree", git = "https://github.com/subroutine-app/gpui", rev = "23ee17142437f8bcec067c4e3bdaa046153df886" }
 reqwest = { package = "gpui-pre-reqwest", version = "=0.12.15", default-features = false, features = [
     "charset",
     "http2",
@@ -124,15 +122,6 @@ errno = { version = "0.3.14", default-features = false }
 features = ["Wdk", "Wdk_System", "Wdk_System_SystemServices"]
 version = "0.58.0"
 
-# The pre backend's renderer is vendored to add in-scene backdrop blur and
-# content filters. Patches only apply at a workspace root, so an application
-# depending on gpui-kit must repeat these entries; see `vendor/README.md`.
-[patch.crates-io]
-gpui-pre = { path = "vendor/gpui-pre" }
-gpui-pre-apple = { path = "vendor/gpui-pre-apple" }
-gpui-pre-wgpu = { path = "vendor/gpui-pre-wgpu" }
-gpui-pre-windows = { path = "vendor/gpui-pre-windows" }
-
 [workspace.lints.clippy]
 almost_complete_range = "allow"
 arc_with_non_send_sync = "allow"
@@ -170,15 +159,15 @@ rustybuzz = { opt-level = 3 }
 taffy = { opt-level = 3 }
 ttf-parser = { opt-level = 3 }
 smol = { opt-level = 3 }
-gpui-pre = { opt-level = 3 }
+mhr-gpui = { opt-level = 3 }
 gpui-fast = { opt-level = 3 }
 gpui-fast-platform = { opt-level = 3 }
-gpui-pre-platform = { opt-level = 3 }
+mhr-gpui-platform = { opt-level = 3 }
 tree-sitter = { opt-level = 3 }
-gpui-pre-sum-tree = { opt-level = 3 }
+mhr-sum-tree = { opt-level = 3 }
 ropey = { opt-level = 3 }
 lsp-types = { opt-level = 3 }
-gpui-pre-reqwest-client = { opt-level = 3 }
+mhr-reqwest-client = { opt-level = 3 }
 markdown = { opt-level = 3 }
 xml5ever = { opt-level = 3 }
 # `quickjs-jit` is a facade that re-exports `quickjs-jit-core`, so naming it alone

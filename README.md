@@ -6,6 +6,9 @@
 
 [English](./README.md) | [简体中文](./README.zh-CN.md)
 
+> This is Subroutine's fork of GPUI Kit, built on its own GPUI fork. See
+> [docs/FORK.md](docs/FORK.md) for what it adds.
+
 [![Build Status](https://github.com/longbridge/gpui-kit/actions/workflows/ci.yml/badge.svg)](https://github.com/longbridge/gpui-kit/actions/workflows/ci.yml) [![Docs](https://docs.rs/gpui-kit/badge.svg)](https://docs.rs/gpui-kit/) [![Crates.io](https://img.shields.io/crates/v/gpui-kit.svg)](https://crates.io/crates/gpui-kit)
 
 Build fantastic, high-performance desktop apps with Rust and GPUI.

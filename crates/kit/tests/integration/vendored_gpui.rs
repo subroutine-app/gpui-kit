@@ -1,4 +1,4 @@
-//! Behavior the vendored GPUI backend adds (see `vendor/README.md`): eased notched-wheel
+//! Behavior Subroutine's GPUI fork adds (see its `docs/upstream.md`): eased notched-wheel
 //! scrolling, animated programmatic scrolling, and held element drags. Time is the test
 //! executor's clock, so every frame below samples a known point of a transition.
 use crate::common;
