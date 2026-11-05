@@ -6260,7 +6260,7 @@ dependencies = [
 [[package]]
 name = "mhr-bench-metrics"
 version = "0.2.0"
-source = "git+https://github.com/subroutine-app/gpui?rev=b9393fa9d2e16784bc85a8e48f4b98ec2281f19a#b9393fa9d2e16784bc85a8e48f4b98ec2281f19a"
+source = "git+https://github.com/subroutine-app/gpui?rev=f3bef55ef6938a1b0dbd4a3dee9dd58a29b74e11#f3bef55ef6938a1b0dbd4a3dee9dd58a29b74e11"
 dependencies = [
  "anyhow",
  "criterion",
@@ -6271,7 +6271,7 @@ dependencies = [
 [[package]]
 name = "mhr-collections"
 version = "0.2.0"
-source = "git+https://github.com/subroutine-app/gpui?rev=b9393fa9d2e16784bc85a8e48f4b98ec2281f19a#b9393fa9d2e16784bc85a8e48f4b98ec2281f19a"
+source = "git+https://github.com/subroutine-app/gpui?rev=f3bef55ef6938a1b0dbd4a3dee9dd58a29b74e11#f3bef55ef6938a1b0dbd4a3dee9dd58a29b74e11"
 dependencies = [
  "indexmap",
  "mhr-gpui-util",
@@ -6281,7 +6281,7 @@ dependencies = [
 [[package]]
 name = "mhr-derive-refineable"
 version = "0.2.0"
-source = "git+https://github.com/subroutine-app/gpui?rev=b9393fa9d2e16784bc85a8e48f4b98ec2281f19a#b9393fa9d2e16784bc85a8e48f4b98ec2281f19a"
+source = "git+https://github.com/subroutine-app/gpui?rev=f3bef55ef6938a1b0dbd4a3dee9dd58a29b74e11#f3bef55ef6938a1b0dbd4a3dee9dd58a29b74e11"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -6291,7 +6291,7 @@ dependencies = [
 [[package]]
 name = "mhr-gpui"
 version = "0.2.0"
-source = "git+https://github.com/subroutine-app/gpui?rev=b9393fa9d2e16784bc85a8e48f4b98ec2281f19a#b9393fa9d2e16784bc85a8e48f4b98ec2281f19a"
+source = "git+https://github.com/subroutine-app/gpui?rev=f3bef55ef6938a1b0dbd4a3dee9dd58a29b74e11#f3bef55ef6938a1b0dbd4a3dee9dd58a29b74e11"
 dependencies = [
  "accesskit",
  "anyhow",
@@ -6363,7 +6363,7 @@ dependencies = [
 [[package]]
 name = "mhr-gpui-apple"
 version = "0.2.0"
-source = "git+https://github.com/subroutine-app/gpui?rev=b9393fa9d2e16784bc85a8e48f4b98ec2281f19a#b9393fa9d2e16784bc85a8e48f4b98ec2281f19a"
+source = "git+https://github.com/subroutine-app/gpui?rev=f3bef55ef6938a1b0dbd4a3dee9dd58a29b74e11#f3bef55ef6938a1b0dbd4a3dee9dd58a29b74e11"
 dependencies = [
  "anyhow",
  "async-task",
@@ -6402,7 +6402,7 @@ dependencies = [
 [[package]]
 name = "mhr-gpui-ios"
 version = "0.2.0"
-source = "git+https://github.com/subroutine-app/gpui?rev=b9393fa9d2e16784bc85a8e48f4b98ec2281f19a#b9393fa9d2e16784bc85a8e48f4b98ec2281f19a"
+source = "git+https://github.com/subroutine-app/gpui?rev=f3bef55ef6938a1b0dbd4a3dee9dd58a29b74e11#f3bef55ef6938a1b0dbd4a3dee9dd58a29b74e11"
 dependencies = [
  "anyhow",
  "block2 0.6.2",
@@ -6423,7 +6423,7 @@ dependencies = [
 [[package]]
 name = "mhr-gpui-linux"
 version = "0.2.0"
-source = "git+https://github.com/subroutine-app/gpui?rev=b9393fa9d2e16784bc85a8e48f4b98ec2281f19a#b9393fa9d2e16784bc85a8e48f4b98ec2281f19a"
+source = "git+https://github.com/subroutine-app/gpui?rev=f3bef55ef6938a1b0dbd4a3dee9dd58a29b74e11#f3bef55ef6938a1b0dbd4a3dee9dd58a29b74e11"
 dependencies = [
  "accesskit",
  "accesskit_unix",
@@ -6467,7 +6467,7 @@ dependencies = [
 [[package]]
 name = "mhr-gpui-macos"
 version = "0.2.0"
-source = "git+https://github.com/subroutine-app/gpui?rev=b9393fa9d2e16784bc85a8e48f4b98ec2281f19a#b9393fa9d2e16784bc85a8e48f4b98ec2281f19a"
+source = "git+https://github.com/subroutine-app/gpui?rev=f3bef55ef6938a1b0dbd4a3dee9dd58a29b74e11#f3bef55ef6938a1b0dbd4a3dee9dd58a29b74e11"
 dependencies = [
  "accesskit",
  "accesskit_macos",
@@ -6507,7 +6507,7 @@ dependencies = [
 [[package]]
 name = "mhr-gpui-macros"
 version = "0.2.0"
-source = "git+https://github.com/subroutine-app/gpui?rev=b9393fa9d2e16784bc85a8e48f4b98ec2281f19a#b9393fa9d2e16784bc85a8e48f4b98ec2281f19a"
+source = "git+https://github.com/subroutine-app/gpui?rev=f3bef55ef6938a1b0dbd4a3dee9dd58a29b74e11#f3bef55ef6938a1b0dbd4a3dee9dd58a29b74e11"
 dependencies = [
  "heck 0.5.0",
  "proc-macro-crate 3.5.0",
@@ -6519,7 +6519,7 @@ dependencies = [
 [[package]]
 name = "mhr-gpui-platform"
 version = "0.2.0"
-source = "git+https://github.com/subroutine-app/gpui?rev=b9393fa9d2e16784bc85a8e48f4b98ec2281f19a#b9393fa9d2e16784bc85a8e48f4b98ec2281f19a"
+source = "git+https://github.com/subroutine-app/gpui?rev=f3bef55ef6938a1b0dbd4a3dee9dd58a29b74e11#f3bef55ef6938a1b0dbd4a3dee9dd58a29b74e11"
 dependencies = [
  "anyhow",
  "console_error_panic_hook",
@@ -6535,7 +6535,7 @@ dependencies = [
 [[package]]
 name = "mhr-gpui-shared-string"
 version = "0.2.0"
-source = "git+https://github.com/subroutine-app/gpui?rev=b9393fa9d2e16784bc85a8e48f4b98ec2281f19a#b9393fa9d2e16784bc85a8e48f4b98ec2281f19a"
+source = "git+https://github.com/subroutine-app/gpui?rev=f3bef55ef6938a1b0dbd4a3dee9dd58a29b74e11#f3bef55ef6938a1b0dbd4a3dee9dd58a29b74e11"
 dependencies = [
  "schemars",
  "serde",
@@ -6545,7 +6545,7 @@ dependencies = [
 [[package]]
 name = "mhr-gpui-util"
 version = "0.2.0"
-source = "git+https://github.com/subroutine-app/gpui?rev=b9393fa9d2e16784bc85a8e48f4b98ec2281f19a#b9393fa9d2e16784bc85a8e48f4b98ec2281f19a"
+source = "git+https://github.com/subroutine-app/gpui?rev=f3bef55ef6938a1b0dbd4a3dee9dd58a29b74e11#f3bef55ef6938a1b0dbd4a3dee9dd58a29b74e11"
 dependencies = [
  "anyhow",
  "log",
@@ -6555,7 +6555,7 @@ dependencies = [
 [[package]]
 name = "mhr-gpui-web"
 version = "0.2.0"
-source = "git+https://github.com/subroutine-app/gpui?rev=b9393fa9d2e16784bc85a8e48f4b98ec2281f19a#b9393fa9d2e16784bc85a8e48f4b98ec2281f19a"
+source = "git+https://github.com/subroutine-app/gpui?rev=f3bef55ef6938a1b0dbd4a3dee9dd58a29b74e11#f3bef55ef6938a1b0dbd4a3dee9dd58a29b74e11"
 dependencies = [
  "anyhow",
  "async-channel",
@@ -6584,7 +6584,7 @@ dependencies = [
 [[package]]
 name = "mhr-gpui-wgpu"
 version = "0.2.0"
-source = "git+https://github.com/subroutine-app/gpui?rev=b9393fa9d2e16784bc85a8e48f4b98ec2281f19a#b9393fa9d2e16784bc85a8e48f4b98ec2281f19a"
+source = "git+https://github.com/subroutine-app/gpui?rev=f3bef55ef6938a1b0dbd4a3dee9dd58a29b74e11#f3bef55ef6938a1b0dbd4a3dee9dd58a29b74e11"
 dependencies = [
  "anyhow",
  "bytemuck",
@@ -6611,7 +6611,7 @@ dependencies = [
 [[package]]
 name = "mhr-gpui-windows"
 version = "0.2.0"
-source = "git+https://github.com/subroutine-app/gpui?rev=b9393fa9d2e16784bc85a8e48f4b98ec2281f19a#b9393fa9d2e16784bc85a8e48f4b98ec2281f19a"
+source = "git+https://github.com/subroutine-app/gpui?rev=f3bef55ef6938a1b0dbd4a3dee9dd58a29b74e11#f3bef55ef6938a1b0dbd4a3dee9dd58a29b74e11"
 dependencies = [
  "accesskit",
  "accesskit_windows",
@@ -6640,7 +6640,7 @@ dependencies = [
 [[package]]
 name = "mhr-http-client"
 version = "0.2.0"
-source = "git+https://github.com/subroutine-app/gpui?rev=b9393fa9d2e16784bc85a8e48f4b98ec2281f19a#b9393fa9d2e16784bc85a8e48f4b98ec2281f19a"
+source = "git+https://github.com/subroutine-app/gpui?rev=f3bef55ef6938a1b0dbd4a3dee9dd58a29b74e11#f3bef55ef6938a1b0dbd4a3dee9dd58a29b74e11"
 dependencies = [
  "anyhow",
  "bytes",
@@ -6658,7 +6658,7 @@ dependencies = [
 [[package]]
 name = "mhr-http-client-tls"
 version = "0.2.0"
-source = "git+https://github.com/subroutine-app/gpui?rev=b9393fa9d2e16784bc85a8e48f4b98ec2281f19a#b9393fa9d2e16784bc85a8e48f4b98ec2281f19a"
+source = "git+https://github.com/subroutine-app/gpui?rev=f3bef55ef6938a1b0dbd4a3dee9dd58a29b74e11#f3bef55ef6938a1b0dbd4a3dee9dd58a29b74e11"
 dependencies = [
  "log",
  "rustls",
@@ -6669,7 +6669,7 @@ dependencies = [
 [[package]]
 name = "mhr-refineable"
 version = "0.2.0"
-source = "git+https://github.com/subroutine-app/gpui?rev=b9393fa9d2e16784bc85a8e48f4b98ec2281f19a#b9393fa9d2e16784bc85a8e48f4b98ec2281f19a"
+source = "git+https://github.com/subroutine-app/gpui?rev=f3bef55ef6938a1b0dbd4a3dee9dd58a29b74e11#f3bef55ef6938a1b0dbd4a3dee9dd58a29b74e11"
 dependencies = [
  "mhr-derive-refineable",
 ]
@@ -6677,7 +6677,7 @@ dependencies = [
 [[package]]
 name = "mhr-reqwest-client"
 version = "0.2.0"
-source = "git+https://github.com/subroutine-app/gpui?rev=b9393fa9d2e16784bc85a8e48f4b98ec2281f19a#b9393fa9d2e16784bc85a8e48f4b98ec2281f19a"
+source = "git+https://github.com/subroutine-app/gpui?rev=f3bef55ef6938a1b0dbd4a3dee9dd58a29b74e11#f3bef55ef6938a1b0dbd4a3dee9dd58a29b74e11"
 dependencies = [
  "anyhow",
  "bytes",
@@ -6694,7 +6694,7 @@ dependencies = [
 [[package]]
 name = "mhr-scheduler"
 version = "0.2.0"
-source = "git+https://github.com/subroutine-app/gpui?rev=b9393fa9d2e16784bc85a8e48f4b98ec2281f19a#b9393fa9d2e16784bc85a8e48f4b98ec2281f19a"
+source = "git+https://github.com/subroutine-app/gpui?rev=f3bef55ef6938a1b0dbd4a3dee9dd58a29b74e11#f3bef55ef6938a1b0dbd4a3dee9dd58a29b74e11"
 dependencies = [
  "async-task",
  "backtrace",
@@ -6710,7 +6710,7 @@ dependencies = [
 [[package]]
 name = "mhr-sum-tree"
 version = "0.2.0"
-source = "git+https://github.com/subroutine-app/gpui?rev=b9393fa9d2e16784bc85a8e48f4b98ec2281f19a#b9393fa9d2e16784bc85a8e48f4b98ec2281f19a"
+source = "git+https://github.com/subroutine-app/gpui?rev=f3bef55ef6938a1b0dbd4a3dee9dd58a29b74e11#f3bef55ef6938a1b0dbd4a3dee9dd58a29b74e11"
 dependencies = [
  "heapless",
  "mhr-ztracing",
@@ -6721,7 +6721,7 @@ dependencies = [
 [[package]]
 name = "mhr-ztracing"
 version = "0.2.0"
-source = "git+https://github.com/subroutine-app/gpui?rev=b9393fa9d2e16784bc85a8e48f4b98ec2281f19a#b9393fa9d2e16784bc85a8e48f4b98ec2281f19a"
+source = "git+https://github.com/subroutine-app/gpui?rev=f3bef55ef6938a1b0dbd4a3dee9dd58a29b74e11#f3bef55ef6938a1b0dbd4a3dee9dd58a29b74e11"
 dependencies = [
  "mhr-ztracing-macro",
  "tracing",
@@ -6730,7 +6730,7 @@ dependencies = [
 [[package]]
 name = "mhr-ztracing-macro"
 version = "0.2.0"
-source = "git+https://github.com/subroutine-app/gpui?rev=b9393fa9d2e16784bc85a8e48f4b98ec2281f19a#b9393fa9d2e16784bc85a8e48f4b98ec2281f19a"
+source = "git+https://github.com/subroutine-app/gpui?rev=f3bef55ef6938a1b0dbd4a3dee9dd58a29b74e11#f3bef55ef6938a1b0dbd4a3dee9dd58a29b74e11"
 
 [[package]]
 name = "mime"

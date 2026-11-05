@@ -14,7 +14,9 @@ the workspace `Cargo.toml`. Applications depend on `gpui-kit` alone and need no
 - in-scene backdrop blur and content filters (`backdrop_blur`, `blur`, `filter`),
   ported from gpui-ce;
 - backdrop snapshots (`backdrop_snapshot`), so a backdrop blur under a scrim
-  blurs what is beneath the scrim;
+  blurs what is beneath the scrim, and taken on their own by an element with
+  both a drop shadow and a backdrop blur, so the blur leaves out the element's
+  own shadow;
 - edge fades (`fade_edges`);
 - eased notched-wheel scrolling and animated programmatic scrolling
   (`ScrollHandle::set_offset_animated`, `scroll_to_item_animated`, …);
@@ -31,7 +33,8 @@ back where they use them.
 - **Glass** (`component::glass`): a blur-backed material for any styled
   element, with theme glass tokens and opt-in popover glass. Dialog,
   AlertDialog and Sheet take a backdrop snapshot before their scrim, so glass
-  on them blurs the page and not the scrim.
+  on them blurs the page and not the scrim. Elevated glass blurs the page
+  from before its own shadow.
 - **Popup motion**: context, dropdown, app menu bar, popover and hover card
   surfaces share one entrance; `menu::ContextMenuLayer` opens a menu at a point.
 - **Settings**: a compact row/section hierarchy and the standalone

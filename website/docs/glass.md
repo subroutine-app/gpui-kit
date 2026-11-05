@@ -56,7 +56,7 @@ The surface role decides the color laid over the blur, the text color on it, and
 - **Elevation:** `Glass::elevation(GlassElevation::Flat | Raised | Overlay)` overrides the surface's default. `Overlay` is the popover shadow, `Raised` the tight shadow of a raised control. A theme with `shadow` off draws every elevation flat.
 - **Focus:** `Glass::focused(true)` draws the focus ring inside the edge in the theme's `ring` color. It stays visible inside clipping ancestors and does not tint the backdrop. Pass the control's real focus state, for instance `handle.is_focused(window)`.
 
-The edge is an inset shadow, painted over the fill and clipped to the element. Drop shadows sit under the element and are part of what the blur samples, which darkens the glass slightly near its lower edge; keep elevation for surfaces that really float.
+The edge is an inset shadow, painted over the fill and clipped to the element. Drop shadows are drawn under the element as well as around it, but the blur leaves the surface's own shadow out: GPUI records a backdrop snapshot before a glass surface with elevation paints its shadow, and the blur reads that, so the glass keeps its contrast in light and dark themes. Glass on a scrim reads the scrim's snapshot instead, which leaves out both. Only elevated glass takes such a snapshot; flat glass blurs the live frame. Another element's shadow painted before the glass, such as a neighbor's, is still part of what the blur samples, as it would be through real glass.
 
 ## Glass under a scrim
 

@@ -19,7 +19,8 @@
 //! The material is a backdrop blur under a translucent fill, nothing more.
 //! There is no refraction, lensing, dispersion or specular lighting:
 //! [`GlassPreset::Liquid`] suggests a lit edge with a faint highlight along
-//! its top, painted over a lighter blur.
+//! its top, painted over a lighter blur. The blur leaves out the surface's own
+//! elevation shadow, which GPUI draws under it as well as around it.
 //!
 //! # Where there is no backdrop
 //!
