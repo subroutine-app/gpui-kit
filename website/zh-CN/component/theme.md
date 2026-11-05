@@ -44,9 +44,51 @@ cx.theme().foreground
 
 `cx.theme().button_primary` 等顶层字段仍然是纯色 `Hsla`，保持兼容。需要完整 resolved token 时使用 `cx.theme().tokens.button_primary`；其中 `.color` 是纯色代表色，`.background` 是实际配置的 `Background`，包含渐变。
 
+## 键名
+
+少数键也可以使用 Zed 主题的写法，例如用 `link.foreground` 表示 `link`、用 `comment.doc` 表示 `comment_doc`。[`.theme-schema.json`](https://github.com/longbridge/gpui-kit/blob/main/.theme-schema.json) 列出了 GPUI Kit 读取的全部键及这些别名。两种写法同时出现时，以 GPUI Kit 自己的键名为准。
+
+## 派生颜色与对比度
+
+danger、success、warning 和 info 按钮的背景是对应状态色以 20%、30% 和 40% 叠加在背景上。主题没有设置这些按钮的文字颜色时，GPUI Kit 从状态色出发，在保持色相的前提下调深或调浅，直到它在三种背景上都达到 4.5:1 的对比度。主题设置的文字颜色保持原样。
+
+`contrast_ratio(a, b)` 返回两个不透明颜色的 WCAG 2 对比度，范围为 1 到 21，应用可以据此选出在主题某个颜色上清晰可读的文字颜色：
+
+```rs
+use gpui_kit::component::{ActiveTheme as _, contrast_ratio};
+
+let theme = cx.theme();
+let text = if contrast_ratio(theme.foreground, highlight) >= contrast_ratio(theme.background, highlight) {
+    theme.foreground
+} else {
+    theme.background
+};
+```
+
+## 搜索匹配
+
+使用 `cx.theme().search_match` 标记匹配的文本范围，使用 `cx.theme().search_match_active` 标记当前结果。默认值来自主题的黄色，不透明度分别为 25% 和 55%。文字保留前景色，便于在浅色和深色主题中阅读。
+
+主题文件可以在 `colors` 中设置 `search.match.background` 和 `search.match.active.background`。两者都接受纯色或渐变，对应的 `cx.theme().tokens` 字段保留完整背景。
+
+```json
+{
+  "colors": {
+    "search.match.background": "#eab30840",
+    "search.match.active.background": "#eab3088c"
+  }
+}
+```
+
+## 编辑器颜色
+
+主题 `highlight` 部分中的 `editor.background` 设置代码编辑器、文本编辑器和 Markdown 代码块的背景，默认使用输入框背景。代码块还带有 `border` 颜色的 1 px 轮廓。`Theme::editor_background()` 返回该背景，应用绘制自己的代码时也可以使用。`editor.foreground` 设置代码编辑器的文本颜色，`editor.line_number` 和 `editor.active_line_number` 分别设置行号和光标所在行行号的颜色，默认分别使用 `foreground`、`muted.foreground` 和编辑器的文本颜色。
+
+`editor.gutter.border` 设置编辑器行号与文本之间分隔线的颜色，默认使用 `border`。
+
 ## Theme Registry
 
-仓库在 [themes](https://github.com/longbridge/gpui-kit/tree/main/themes) 目录下内置了 20+ 主题。
+仓库在 [themes](https://github.com/longbridge/gpui-kit/tree/main/themes) 目录下内置了 50 多个主题，每个都通过了[主题工具](https://github.com/longbridge/gpui-kit/tree/main/script/themes)的对比度检查。开启 `bundled-themes` feature 后，`ThemeRegistry::load_bundled_themes` 会从二进制中注册全部主题。
 
 你可以通过 [ThemeRegistry] 来加载和监听这些主题文件：
 
@@ -73,6 +115,71 @@ pub fn init(cx: &mut App) {
     }
 }
 ```
+
+`apply_config` 会替换整个主题。主题文件没有设置的项，例如 `radius`、`shadow`、字体或 `highlight` 部分，都会使用该文件所属模式的默认值，因此之前主题的设置不会保留下来。如果应用自己在主题上设置了圆角，切换主题后需要重新设置。字体请使用[字体覆盖](#字体覆盖)。
+
+### 内置主题与用户文件夹
+
+应用可以把主题嵌入二进制文件，同时允许用户添加自己的主题。用 `add_bundled_themes_from_str` 添加嵌入的文件（也可以自己解析主题，例如在后台线程中解析，再交给 `add_bundled_themes`），并用 `watch_dir` 监听用户的文件夹：
+
+```rs
+const THEMES: &[&str] = &[
+    include_str!("../themes/macos-classic.json"),
+    include_str!("../themes/ayu.json"),
+];
+
+let registry = ThemeRegistry::global_mut(cx);
+for theme in THEMES {
+    registry.add_bundled_themes_from_str(theme)?;
+}
+ThemeRegistry::watch_dir(user_themes_dir, cx, |cx| { /* 应用已保存的主题 */ })?;
+```
+
+`upsert_themes_from_str` 的作用相同，并返回所添加主题的名称；用修改后的文件再次调用时会替换这些主题。
+
+文件夹每次重新加载时，内置主题都会保留。文件夹中的主题如果与某个内置主题同名（不区分大小写），就会替换它，因此用户可以把内置主题的文件复制到文件夹中再修改。任何主题都不会占用 GPUI Kit 两个默认主题的名称。标记为 `is_default` 的文件夹主题会改为成为其模式的默认主题，直到它的文件被删除。如果副本的模式与它替换的主题不同，那么在该主题是当前浅色或深色主题时，副本不会接管它。用 `ThemeRegistry::theme(name)` 查找主题，它先精确匹配名称，再忽略大小写匹配。文件夹在后台线程中读取和解析，无法解析的文件会被跳过并记录日志。通过 `load_themes_from_str` 添加的主题会一直保留，占用其他主题没有使用的名称。
+
+`ThemeRegistry::load_dir` 以同样的方式读取一次文件夹，但不监听它。适用于不需要热重载的场合，以及测试：`watch_dir` 的监听器运行在自己的线程上，`#[gpui::test]` 的确定性执行器不允许这样做。每次调用 `watch_dir` 或 `load_dir` 都会替换之前的文件夹：之前的监听会停止，之前文件夹的读取如果较晚结束会被丢弃，因此最后请求的文件夹就是注册的那个。
+
+## 字体覆盖
+
+主题文件可以指定字体，没有指定字体的主题会把字体重置为默认字体。因此，用户在应用设置中选择的字体需要在每次切换主题后保留下来。把它设置为一个 `FontOverrides` 即可，`apply_config` 每次应用主题时，都会在同一次更新中把它重新覆盖到主题之上：
+
+```rs
+use gpui_kit::component::{FontOverrides, Theme};
+
+Theme::update(cx, |theme| {
+    theme.set_font_overrides(
+        FontOverrides::new()
+            .with_font_family("Inter")
+            .with_font_size(px(16.) * zoom)
+            .with_mono_font_family("JetBrains Mono")
+            .with_mono_font_size(px(13.)),
+    )
+});
+```
+
+未设置的字段跟随主题。`font_size` 同时也是应用的缩放比例，因为 `Root` 会用它设置窗口的 rem 大小。切换主题、切换浅色或深色模式、重新加载主题文件夹，都会保留这些覆盖设置，并且主题的观察者每次切换只会收到一次通知。如果在 `Theme` 的观察者中重新设置字体，每次切换都会再更新一次主题。
+
+### 代码字体特性
+
+`with_mono_font_features` 用来设置等宽字体的 OpenType 特性，主题通过 `Theme::mono_font_features` 携带它们。如果应用提供了代码连字的设置，可以这样关闭连字：
+
+```rs
+use std::sync::Arc;
+use gpui_kit::FontFeatures;
+
+let no_ligatures = FontFeatures(Arc::new(vec![("calt".into(), 0), ("liga".into(), 0)]));
+Theme::update(cx, |theme| {
+    theme.set_font_overrides(
+        FontOverrides::new()
+            .with_mono_font_family("JetBrains Mono")
+            .with_mono_font_features(no_ligatures),
+    )
+});
+```
+
+JetBrains Mono 通过 `calt` 绘制连字，另一些字体则通过 `liga`，所以示例把两者都关闭了。字体特性由应用决定，主题不会设置，所以没有这项覆盖时，字体使用自身的默认特性。文本视图（行内代码和代码块）、代码编辑器、Diff 视图和按键提示都会跟随这项设置。应用自己使用等宽字体绘制的元素，可以在 `.font_family(cx.theme().mono_font_family.clone())` 旁边加上 `.font_features(cx.theme().mono_font_features.clone())`，以跟随这项设置。
 
 [ActiveTheme]: https://docs.rs/gpui-component/latest/gpui_component/theme/trait.ActiveTheme.html
 [ThemeRegistry]: https://docs.rs/gpui-component/latest/gpui_component/theme/struct.ThemeRegistry.html

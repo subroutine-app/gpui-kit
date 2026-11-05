@@ -5,6 +5,7 @@ use gpui::{
     Window, prelude::FluentBuilder as _,
 };
 
+use super::ContextMenuStyle;
 use super::{Input, TextareaState};
 use crate::native_menu::NativeMenu;
 use crate::{RoleOverride, Sizable, Size, StyledExt as _};
@@ -32,6 +33,9 @@ pub struct Textarea {
     ///
     /// If set, this overrides the built-in context menu.
     context_menu_builder: Option<Rc<dyn Fn(NativeMenu, &mut Window, &mut App) -> NativeMenu>>,
+
+    /// What draws the right-click menu, when this textarea chose.
+    context_menu_style: Option<ContextMenuStyle>,
 
     paste_handler: Option<Rc<dyn Fn(&gpui::ClipboardItem, &mut Window, &mut App) -> bool>>,
 }
@@ -82,6 +86,7 @@ impl Textarea {
             accessibility_id: None,
             aria_label: None,
             context_menu_builder: None,
+            context_menu_style: None,
             paste_handler: None,
             token_renderer: None,
             token_click_listener: None,
@@ -154,6 +159,16 @@ impl Textarea {
         self
     }
 
+    /// What draws the right-click menu: the operating system's menu on macOS
+    /// and Windows, the default, or GPUI's menu in the theme's colors with
+    /// [`ContextMenuStyle::Drawn`].
+    ///
+    /// Without it the textarea follows [`ContextMenuStyle::set_app_default`].
+    pub fn context_menu_style(mut self, style: ContextMenuStyle) -> Self {
+        self.context_menu_style = Some(style);
+        self
+    }
+
     /// Intercept paste payloads (images, files) before the default text insertion.
     ///
     /// `true` consumes the paste so nothing is inserted, `false` falls through
@@ -208,6 +223,9 @@ impl Textarea {
             .when_some(self.aria_label, |this, label| this.aria_label(label))
             .when_some(self.context_menu_builder, |this, build| {
                 this.context_menu(move |menu, window, cx| build(menu, window, cx))
+            })
+            .when_some(self.context_menu_style, |this, style| {
+                this.context_menu_style(style)
             })
             .when_some(self.paste_handler, |this, handler| {
                 this.on_paste(move |item, window, cx| handler(item, window, cx))

@@ -171,7 +171,8 @@ impl PartialEq for RenderedText {
 
 impl Eq for RenderedText {}
 
-/// A background painted behind one range of a [`RenderedText`].
+/// A background painted behind one range of a [`RenderedText`], and
+/// optionally a color for the text in it.
 ///
 /// It is painted under the text and under the selection, and never changes
 /// layout. Where highlights overlap, the later one paints over the earlier.
@@ -179,15 +180,26 @@ impl Eq for RenderedText {}
 pub struct RangeHighlight {
     range: Range<usize>,
     background: Hsla,
+    text_color: Option<Hsla>,
 }
 
 impl RangeHighlight {
-    /// A highlight over `range`, in byte offsets of a [`RenderedText`].
+    /// A highlight over `range`, in byte offsets of a [`RenderedText`]. The
+    /// text keeps its own colors.
     pub fn new(range: Range<usize>, background: impl Into<Hsla>) -> Self {
         Self {
             range,
             background: background.into(),
+            text_color: None,
         }
+    }
+
+    /// Draws the text in the range in `color`, in place of its own colors,
+    /// syntax and link colors included, so it stays readable on a strong
+    /// background. Underlines and strikethroughs keep their colors.
+    pub fn with_text_color(mut self, color: impl Into<Hsla>) -> Self {
+        self.text_color = Some(color.into());
+        self
     }
 
     pub fn range(&self) -> Range<usize> {
@@ -196,6 +208,27 @@ impl RangeHighlight {
 
     pub fn background(&self) -> Hsla {
         self.background
+    }
+
+    /// The color the text in the range is drawn in, when it isn't its own.
+    pub fn text_color(&self) -> Option<Hsla> {
+        self.text_color
+    }
+}
+
+/// What a range highlight paints over the part of a text leaf it covers.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct HighlightPaint {
+    pub(crate) background: Hsla,
+    pub(crate) text_color: Option<Hsla>,
+}
+
+impl From<Hsla> for HighlightPaint {
+    fn from(background: Hsla) -> Self {
+        Self {
+            background,
+            text_color: None,
+        }
     }
 }
 
@@ -274,9 +307,20 @@ impl RenderedIndex {
         let mut builder = IndexBuilder::default();
         let mut blocks = Vec::with_capacity(document.blocks.len());
         for block in document.blocks.iter() {
+            // Blocks are a blank line apart, as in `ParsedDocument::text`. A
+            // block that renders no text takes no separator.
+            let separator_start = builder.text.len();
+            builder
+                .text
+                .push_str(super::document::block_separator(&builder.text));
             let start = builder.text.len();
             builder.push_block(block);
-            blocks.push(start..builder.text.len());
+            if builder.text.len() == start {
+                builder.text.truncate(separator_start);
+                blocks.push(separator_start..separator_start);
+            } else {
+                blocks.push(start..builder.text.len());
+            }
         }
         let index = Self {
             text: builder.text.into(),
@@ -595,9 +639,9 @@ fn paragraph_source_end(paragraph: &Paragraph) -> Option<usize> {
 /// rendering only looks up its leaf.
 #[derive(Debug, Default)]
 pub(crate) struct RangeHighlightFrame {
-    /// Sorted by key. A leaf's backgrounds keep the order the application
+    /// Sorted by key. A leaf's highlights keep the order the application
     /// gave them in, so a later one paints over an earlier one.
-    leaves: Vec<(TextLeafKey, Vec<(Range<usize>, Hsla)>)>,
+    leaves: Vec<(TextLeafKey, Vec<(Range<usize>, HighlightPaint)>)>,
 }
 
 impl RangeHighlightFrame {
@@ -612,27 +656,31 @@ impl RangeHighlightFrame {
                 .index()
                 .resolve(&highlight.range)
                 .ok_or(RangeHighlightError::InvalidRange(ix))?;
+            let paint = HighlightPaint {
+                background: highlight.background,
+                text_color: highlight.text_color,
+            };
             pieces.extend(
                 leaf_ranges
                     .into_iter()
-                    .map(|(key, range)| (key, range, highlight.background)),
+                    .map(|(key, range)| (key, range, paint)),
             );
         }
 
         // Stable, so each leaf keeps the application's order.
         pieces.sort_by_key(|(key, _, _)| *key);
-        let mut leaves: Vec<(TextLeafKey, Vec<(Range<usize>, Hsla)>)> = Vec::new();
-        for (key, range, background) in pieces {
+        let mut leaves: Vec<(TextLeafKey, Vec<(Range<usize>, HighlightPaint)>)> = Vec::new();
+        for (key, range, paint) in pieces {
             match leaves.last_mut() {
-                Some((last, backgrounds)) if *last == key => backgrounds.push((range, background)),
-                _ => leaves.push((key, vec![(range, background)])),
+                Some((last, highlights)) if *last == key => highlights.push((range, paint)),
+                _ => leaves.push((key, vec![(range, paint)])),
             }
         }
         Ok((!leaves.is_empty()).then_some(Self { leaves }))
     }
 
-    /// The backgrounds of leaf `key`, in its rendered byte space.
-    pub(crate) fn backgrounds(&self, key: TextLeafKey) -> &[(Range<usize>, Hsla)] {
+    /// The highlights of leaf `key`, in its rendered byte space.
+    pub(crate) fn highlights(&self, key: TextLeafKey) -> &[(Range<usize>, HighlightPaint)] {
         self.leaves
             .binary_search_by_key(&key, |(leaf, _)| *leaf)
             .map_or(&[], |ix| self.leaves[ix].1.as_slice())
@@ -645,12 +693,12 @@ impl RangeHighlightFrame {
         let mut leaves = self
             .leaves
             .iter()
-            .filter_map(|(key, backgrounds)| {
+            .filter_map(|(key, highlights)| {
                 let (new_key, unchanged) = remap.leaf(*key)?;
-                let clipped = backgrounds
+                let clipped = highlights
                     .iter()
                     .filter(|(range, _)| range.start < unchanged)
-                    .map(|(range, background)| (range.start..range.end.min(unchanged), *background))
+                    .map(|(range, paint)| (range.start..range.end.min(unchanged), *paint))
                     .collect::<Vec<_>>();
                 (!clipped.is_empty()).then_some((new_key, clipped))
             })
@@ -822,7 +870,9 @@ mod tests {
 
     use gpui::{EntityId, hsla};
 
-    use super::{LeafRemap, RangeHighlight, RangeHighlightFrame, RenderedText, TextLeafKey};
+    use super::{
+        HighlightPaint, LeafRemap, RangeHighlight, RangeHighlightFrame, RenderedText, TextLeafKey,
+    };
     use crate::text::{
         document::ParsedDocument,
         format,
@@ -895,11 +945,12 @@ mod tests {
             let new = parse(&changed);
             let remap = LeafRemap::new(&old, &new, false);
             assert_eq!(remap.table_rows.len(), rows + 1);
+            let paint = HighlightPaint::from(hsla(0.15, 1., 0.5, 0.4));
             let frame = RangeHighlightFrame {
                 leaves: remap
                     .old_leaves
                     .iter()
-                    .map(|(key, _)| (*key, vec![(0..1, hsla(0.15, 1., 0.5, 0.4))]))
+                    .map(|(key, _)| (*key, vec![(0..1, paint)]))
                     .collect(),
             };
             assert_eq!(frame.leaves.len(), (rows + 1) * columns);
@@ -907,8 +958,8 @@ mod tests {
             assert_eq!(kept.leaves.len(), columns);
             for column in 0..columns {
                 assert_eq!(
-                    kept.backgrounds(TextLeafKey::table_cell(0, column)),
-                    &[(0..1, hsla(0.15, 1., 0.5, 0.4))],
+                    kept.highlights(TextLeafKey::table_cell(0, column)),
+                    &[(0..1, paint)],
                 );
             }
         }
@@ -953,6 +1004,11 @@ mod tests {
         let highlight = RangeHighlight::new(2..5, color);
         assert_eq!(highlight.range(), 2..5);
         assert_eq!(highlight.background(), color);
+        assert_eq!(highlight.text_color(), None);
+
+        let text_color = hsla(0., 0., 0., 1.);
+        let highlight = highlight.with_text_color(text_color);
+        assert_eq!(highlight.text_color(), Some(text_color));
     }
 
     fn rendered(document: ParsedDocument) -> RenderedText {
@@ -1170,10 +1226,10 @@ mod tests {
     #[test]
     fn a_range_across_blocks_holds_the_separators_between_them() {
         let markdown = "ab\n\ncd\n\n# ef";
-        // "ab\ncd\nef\n"
+        // "ab\n\ncd\n\nef\n"
         assert_eq!(
             converted_needle(markdown, "b\n\ncd\n\n# e").as_deref(),
-            Some("b\ncd\ne")
+            Some("b\n\ncd\n\ne")
         );
 
         let table = "| a | b |\n|---|---|\n| c | d |";
@@ -1254,17 +1310,17 @@ mod tests {
         };
         let text = rendered(format::markdown::parse(markdown, &mut cx).unwrap());
 
-        assert_eq!(text.as_str(), "before\n$TSLA.US\nafter\n");
+        assert_eq!(text.as_str(), "before\n\n$TSLA.US\n\nafter\n");
         let ticker = nth(markdown, "$TSLA.US", 0);
-        assert_eq!(text.range_for_source(ticker.clone()), Some(7..15));
+        assert_eq!(text.range_for_source(ticker.clone()), Some(8..16));
         // Part of the block's source converts the whole block.
         assert_eq!(
             text.range_for_source(ticker.start + 1..ticker.start + 3),
-            Some(7..15)
+            Some(8..16)
         );
         assert_eq!(
             text.range_for_source(nth(markdown, "re\n\n$T", 0)),
-            Some(4..15)
+            Some(4..16)
         );
     }
 

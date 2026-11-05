@@ -1,20 +1,21 @@
 use gpui::{
-    AnyElement, App, Axis, Div, InteractiveElement as _, IntoElement, ParentElement, SharedString,
-    Stateful, Styled, Window, div, prelude::FluentBuilder as _,
+    AnyElement, App, Axis, InteractiveElement as _, IntoElement, ParentElement, SharedString,
+    Styled, Window, div, prelude::FluentBuilder as _,
 };
 use std::{any::TypeId, ops::Deref, rc::Rc};
 
 use crate::{
-    ActiveTheme as _, AxisExt, StyledExt as _,
-    label::Label,
+    AxisExt, Disableable as _,
     setting::{
-        AnySettingField, ElementField, RenderOptions,
+        AnySettingField, ElementField, RenderOptions, SettingRow,
         fields::{
-            BoolField, DropdownField, NumberField, ResetHandler, SettingFieldRender, StringField,
+            BoolField, DropdownField, InfoField, NumberField, ResetHandler, SettingFieldRender,
+            StringField,
         },
+        matches_query,
+        section::SectionContent,
     },
     text::Text,
-    v_flex,
 };
 
 /// Setting item.
@@ -149,6 +150,20 @@ impl SettingItem {
         self
     }
 
+    /// Set supplementary help behind an info icon beside the title.
+    ///
+    /// Use it for context most people do not need every time they read the
+    /// item; what someone needs in order to choose belongs in
+    /// [`Self::description`]. The text is searchable.
+    ///
+    /// Only applies to [`SettingItem::Item`].
+    pub fn info(mut self, info: impl Into<SharedString>) -> Self {
+        if let SettingItem::Item { field, .. } = &mut self {
+            *field = InfoField::wrap(field.clone(), info.into());
+        }
+        self
+    }
+
     /// Set the layout of the setting item.
     ///
     /// Only applies to [`SettingItem::Item`].
@@ -168,19 +183,23 @@ impl SettingItem {
                 title,
                 description,
                 keywords,
+                field,
                 ..
             } => {
-                let q = &query.to_lowercase();
-                title.to_lowercase().contains(q)
-                    || description
-                        .as_ref()
-                        .map_or(false, |d| d.get_text(cx).to_lowercase().contains(q))
-                    || keywords.iter().any(|s| s.to_lowercase().contains(q))
+                let description = description.as_ref().map(|d| d.get_text(cx));
+                [
+                    Some(title),
+                    description.as_ref(),
+                    InfoField::info(field.as_ref()).as_ref(),
+                ]
+                .into_iter()
+                .flatten()
+                .chain(keywords)
+                .any(|text| matches_query(query, text))
             }
             // We need to show all custom elements when not searching.
             SettingItem::Element { keywords, .. } => {
-                let q = &query.to_lowercase();
-                query.is_empty() || keywords.iter().any(|s| s.to_lowercase().contains(q))
+                query.is_empty() || keywords.iter().any(|s| matches_query(query, s))
             }
         }
     }
@@ -254,72 +273,52 @@ impl SettingItem {
         options: &RenderOptions,
         window: &mut Window,
         cx: &mut App,
-    ) -> Stateful<Div> {
-        div()
-            .id(SharedString::from(format!("item-{}", options.item_ix())))
-            .w_full()
-            .child(match self {
-                SettingItem::Item {
-                    title,
-                    description,
-                    layout,
-                    disabled,
+    ) -> SectionContent {
+        let id = SharedString::from(format!("item-{}", options.item_ix()));
+        match self {
+            SettingItem::Item {
+                title,
+                description,
+                layout,
+                disabled,
+                field,
+                ..
+            } => {
+                let layout = if options.layout().is_vertical() {
+                    Axis::Vertical
+                } else {
+                    layout
+                };
+                let info = InfoField::info(field.as_ref());
+                let control = Self::render_field(
+                    title.clone(),
                     field,
-                    ..
-                } => {
-                    let layout = if options.layout().is_vertical() {
-                        Axis::Vertical
-                    } else {
-                        layout
-                    };
+                    options.with_layout(layout).with_disabled(disabled),
+                    window,
+                    cx,
+                );
 
-                    div()
-                        .w_full()
-                        .when(disabled, |this| this.opacity(0.5))
-                        .map(|this| {
-                            if layout.is_horizontal() {
-                                this.h_flex().justify_between().items_center()
-                            } else {
-                                this.v_flex()
-                            }
+                SectionContent::Row(Box::new(
+                    SettingRow::new(id, title)
+                        .when_some(description, |this, description| {
+                            this.description(description)
                         })
-                        .gap_3()
-                        .child(
-                            v_flex()
-                                .map(|this| {
-                                    if layout.is_horizontal() {
-                                        this.flex_1().max_w_3_5()
-                                    } else {
-                                        this.w_full()
-                                    }
-                                })
-                                .child(Label::new(title.clone()).text_sm())
-                                .when_some(description, |this, description| {
-                                    this.child(
-                                        div()
-                                            .size_full()
-                                            .text_sm()
-                                            .text_color(cx.theme().muted_foreground)
-                                            .child(description),
-                                    )
-                                }),
-                        )
-                        .child(div().id("field").child(Self::render_field(
-                            title,
-                            field,
-                            options.with_layout(layout).with_disabled(disabled),
-                            window,
-                            cx,
-                        )))
-                        .into_any_element()
-                }
-                SettingItem::Element {
-                    disabled, render, ..
-                } => div()
+                        .when_some(info, |this, info| this.info(info))
+                        .layout(layout)
+                        .disabled(disabled)
+                        .control(control),
+                ))
+            }
+            SettingItem::Element {
+                disabled, render, ..
+            } => SectionContent::Block(
+                div()
+                    .id(id)
                     .w_full()
                     .when(disabled, |this| this.opacity(0.5))
                     .child((render)(&options.with_disabled(disabled), window, cx))
                     .into_any_element(),
-            })
+            ),
+        }
     }
 }

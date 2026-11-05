@@ -110,6 +110,19 @@ window.open_sheet(cx, |sheet, _, _| {
 })
 ```
 
+### Transition
+
+A sheet slides in over 150 ms. `transition_duration(Duration::ZERO)` shows it in place at once.
+
+```rust
+window.open_sheet(cx, |sheet, _, _| {
+    sheet
+        .title("Sessions")
+        .transition_duration(Duration::ZERO)
+        .child("Sheet content")
+})
+```
+
 ### Resizable Sheet
 
 ```rust
@@ -235,6 +248,7 @@ window.close_sheet(cx);
 | `overlay(bool)`          | Show overlay background (default: true) |
 | `overlay_closable(bool)` | Click overlay to close (default: true)  |
 | `on_close(fn)`           | Close event callback                    |
+| `transition_duration(d)` | Slide-in duration; `Duration::ZERO` shows it at once (default: 150 ms) |
 
 ### Placement Options
 

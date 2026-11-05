@@ -113,7 +113,15 @@ impl BlinkCursor {
         }
     }
 
+    /// Start blinking from a visible cursor.
+    ///
+    /// Starting a cursor that is already blinking leaves it as it is: focusing
+    /// an input and its focus event each start it, and a restart between them
+    /// would drop a typing pause made in the meantime.
     pub(crate) fn start(&mut self, cx: &mut Context<Self>) {
+        if self.is_blinking() {
+            return;
+        }
         self.epoch = self.epoch.wrapping_add(1);
         self.last_activity = Some(cx.background_executor().now());
         self.paused = false;
@@ -143,6 +151,11 @@ impl BlinkCursor {
 
     pub(crate) fn visible(&self) -> bool {
         self.visible
+    }
+
+    /// Whether a blink or the end of a typing pause is scheduled.
+    fn is_blinking(&self) -> bool {
+        self.last_activity.is_some() && !self._task.is_ready()
     }
 
     fn set_visible(&mut self, visible: bool, cx: &mut Context<Self>) {
@@ -274,8 +287,8 @@ mod tests {
         cx.run_until_parked();
         assert!(cursor.read_with(cx, |cursor, _| cursor.visible()));
 
-        // The restart drops the first cycle's timer, so the cursor stays
-        // visible for a full interval before it blinks off.
+        // The second start keeps the first cycle, so the cursor stays visible
+        // for a full interval before it blinks off.
         cx.executor()
             .advance_clock(INTERVAL - Duration::from_millis(1));
         cx.run_until_parked();

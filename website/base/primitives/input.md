@@ -117,6 +117,8 @@ immediately; extending or removing the timeout can resume an idle cursor
 without refocusing.
 
 `CursorBlink::default()` restores 500 ms blinking without an idle timeout.
+A focused input in an inactive window shows no cursor and schedules no blinks;
+it starts blinking from a visible cursor when its window becomes active again.
 Applications that use `gpui-component` set the policy on the Component theme
 with `Theme::update` instead, which projects it onto Base; a value written
 directly to the Base theme is replaced by the next Component theme update. See

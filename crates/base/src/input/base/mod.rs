@@ -30,6 +30,7 @@ pub struct InputContextMenuCapabilities {
     masked: bool,
     go_to_definition: bool,
     code_actions: bool,
+    opened_at: Option<usize>,
 }
 
 impl InputContextMenuCapabilities {
@@ -72,6 +73,18 @@ impl InputContextMenuCapabilities {
     pub fn code_actions(mut self, code_actions: bool) -> Self {
         self.code_actions = code_actions;
         self
+    }
+
+    /// Set the byte offset the menu was opened at.
+    pub fn with_opened_at(mut self, offset: usize) -> Self {
+        self.opened_at = Some(offset);
+        self
+    }
+
+    /// The byte offset the menu was opened at: the character a right-click
+    /// landed on, or the caret when Shift-F10 or the Menu key opened it.
+    pub fn opened_at(&self) -> Option<usize> {
+        self.opened_at
     }
 
     pub fn is_disabled(&self) -> bool {

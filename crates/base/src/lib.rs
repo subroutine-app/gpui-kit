@@ -58,9 +58,11 @@ mod progress;
 pub mod questionnaire;
 mod radio;
 mod radio_group;
+mod radius;
 mod reduce_motion;
 mod resizable;
 mod root;
+mod roving_focus;
 mod scroll_bounce;
 mod scrollable_mask;
 mod scrollbar;
@@ -159,6 +161,7 @@ pub use positioner::{Align, Positioner, ResolvedPosition};
 pub use progress::{Progress, ProgressIndicator, ProgressTrack};
 pub use radio::{Radio, RadioStyles};
 pub use radio_group::RadioGroup;
+pub use radius::{concentric_radius, enclosing_radius, nested_radius};
 pub use reduce_motion::apply_system_reduce_motion;
 #[doc(hidden)]
 pub use resizable::PANEL_MIN_SIZE;
@@ -168,6 +171,7 @@ pub use resizable::{
     resizable_panel, resize_handle, v_resizable,
 };
 pub use root::{Root, RootPlugin};
+pub use roving_focus::{RovingFocus, RovingStep};
 pub use scroll_bounce::{ScrollBounce, ScrollBounceMotion};
 pub use scrollable_mask::{
     HorizontalScrollClaim, RoundedFrameCover, ScrollableMask, last_horizontal_scroll_claim,
@@ -196,8 +200,9 @@ pub use text::{
     html, markdown, markdown_ast,
 };
 pub use text_selection::{
-    TextSelection, TextSelectionContentKey, TextSelectionCoverage, TextSelectionEndpoint,
-    TextSelectionEvent, TextSelectionHandle, TextSelectionLayer, TextSelectionProjection,
+    CopyTextSelection, SelectAllText, TextSelection, TextSelectionContentKey,
+    TextSelectionCoverage, TextSelectionEndpoint, TextSelectionEvent, TextSelectionHandle,
+    TextSelectionLayer, TextSelectionMenuRequest, TextSelectionProjection,
     TextSelectionRegistration, TextSelectionRun, TextSelectionScopeId, TextSelectionSnapshot,
     TextSelectionWindowPoints, TouchHandleLayout,
 };
@@ -219,6 +224,7 @@ pub use toggle_group::ToggleGroup;
 pub use toolbar::{Toolbar, ToolbarGroup};
 pub use tooltip::{
     Tooltip, TooltipDefaults, TooltipOverlay, TooltipPositioner, TooltipRequest, TooltipTransition,
+    TooltipTrigger, prepaint_popup_trigger,
 };
 pub use touch_selection::{SelectionEdge, TouchHandle, TouchSelectionSnapshot};
 pub use tree::{Tree, TreeEntry, TreeEntryState, TreeEvent, TreeItem, TreeState};
@@ -255,6 +261,7 @@ pub fn init(cx: &mut App) {
     time_field::init(cx);
     input::init(cx);
     tree::init(cx);
+    tabs::init(cx);
     grid_layout::init(cx);
     text::init(cx);
     root::init(cx);

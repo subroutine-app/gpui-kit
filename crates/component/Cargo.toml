@@ -18,6 +18,8 @@ doctest = false
 gpui-fast = ["dep:gpui-fast", "gpui-base/gpui-fast", "gpui-kit-assets/gpui-fast"]
 test-support = ["gpui/test-support", "gpui-base/test-support", "gpui-fast?/test-support"]
 decimal = ["gpui-base/decimal"]
+# `theme::BUNDLED_THEMES`: the repository's `themes/*.json`, compiled in.
+bundled-themes = []
 inspector = ["gpui_macros/inspector", "gpui/inspector", "gpui-base/inspector", "gpui-fast?/inspector"]
 tree-sitter = ["dep:tree-sitter", "dep:tree-sitter-json"]
 # Syntax highlighting for Markdown, Input and Diff from syntect and bat's

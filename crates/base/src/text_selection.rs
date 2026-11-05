@@ -722,6 +722,7 @@ struct SelectableTextState {
     clear: Option<ClearHandler>,
     copy: Option<CopyCallback>,
     content_key_resolver: Option<ContentKeyResolver>,
+    select_all: Option<FocusCallback>,
 }
 
 impl EventEmitter<TextSelectionEvent> for SelectableTextState {}
@@ -739,6 +740,7 @@ impl SelectableTextState {
             clear: None,
             copy: None,
             content_key_resolver: None,
+            select_all: None,
         }
     }
 
@@ -1076,6 +1078,18 @@ impl TextSelectionHandle {
         self.0.update(cx, |state, _| state.copy_with(callback));
     }
 
+    /// Sets the callback that selects all of the participant's text, which
+    /// puts Select All in the context menu that opens on it. See
+    /// [`TextSelection::on_context_menu`].
+    pub fn select_all_with(
+        &self,
+        callback: impl Fn(&mut Window, &mut App) + 'static,
+        cx: &mut App,
+    ) {
+        self.0
+            .update(cx, |state, _| state.select_all = Some(Rc::new(callback)));
+    }
+
     /// Lays out the touch handles at the ends of this participant's
     /// selection, as they were painted last frame, and gives each a hitbox
     /// where the finger takes it. Call during the participant's prepaint;
@@ -1381,6 +1395,15 @@ struct WindowSelectionState {
     /// This entity, so that touch changes can notify observers from paths that
     /// only hold an [`App`].
     entity_id: Option<EntityId>,
+    /// Where a right-click was pressed on selectable text, and on which
+    /// participant. Letting it go opens the context menu.
+    pending_context_menu: Option<(Point<Pixels>, WeakEntity<SelectableTextState>)>,
+    /// The participant the last context menu opened on, which
+    /// [`SelectAllText`] selects.
+    menu_target: Option<WeakEntity<SelectableTextState>>,
+    /// Where a menu acting on the selection was painted this frame, so that
+    /// pressing it keeps the selection.
+    menu_bounds: Vec<Bounds<Pixels>>,
 }
 
 impl WindowSelectionState {
@@ -2011,6 +2034,24 @@ impl WindowSelectionState {
     /// Records where the menu is painted this frame.
     fn register_touch_ui(&mut self, bounds: Bounds<Pixels>) {
         self.touch.ui_bounds.push(bounds);
+    }
+
+    /// Whether `position` is on a menu that acts on the selection.
+    fn covers_menu(&self, position: Point<Pixels>) -> bool {
+        self.menu_bounds
+            .iter()
+            .any(|bounds| bounds.contains(&position))
+    }
+
+    /// The participant under `position` that a context menu can open on.
+    fn context_menu_participant(
+        &mut self,
+        position: Point<Pixels>,
+        window: &Window,
+        cx: &App,
+    ) -> Option<WeakEntity<SelectableTextState>> {
+        let hit = self.endpoint(position, Some(window), cx);
+        hit.inside.then_some(hit.participant).flatten()
     }
 
     /// Whether `bounds` are where `participant` painted its handles last.
@@ -2843,6 +2884,89 @@ fn with_text_selection_scope<T>(
 /// Window-level operations for text selection.
 pub struct TextSelection;
 
+gpui::actions!(
+    text_selection,
+    [
+        /// Copy the window's text selection, as Cmd-C or Ctrl-C does outside a
+        /// text field. The context menu of selectable text dispatches it, and
+        /// the window's [`crate::Root`] handles it, wherever focus is.
+        CopyTextSelection,
+        /// Select all of the text the context menu of selectable text opened
+        /// on. See [`TextSelectionMenuRequest::supports_select_all`].
+        SelectAllText,
+    ]
+);
+
+/// A context menu asked for on selectable text, by a right-click or by
+/// Shift-F10 and the Menu key. See [`TextSelection::on_context_menu`].
+#[derive(Clone, Debug, PartialEq)]
+pub struct TextSelectionMenuRequest {
+    position: Point<Pixels>,
+    selected_text: SharedString,
+    supports_select_all: bool,
+}
+
+impl TextSelectionMenuRequest {
+    /// Where the menu opens, in window coordinates.
+    pub fn position(&self) -> Point<Pixels> {
+        self.position
+    }
+
+    /// The text [`CopyTextSelection`] copies, as Cmd-C or Ctrl-C would copy
+    /// it now, or empty when nothing is selected.
+    pub fn selected_text(&self) -> &SharedString {
+        &self.selected_text
+    }
+
+    /// Whether any text is selected for Copy to copy.
+    pub fn has_selection(&self) -> bool {
+        !self.selected_text.is_empty()
+    }
+
+    /// Whether the text the menu opened on can select all of itself, which
+    /// [`SelectAllText`] does. A text view can, and a plain
+    /// [`SelectableText`](crate::SelectableText) can't.
+    pub fn supports_select_all(&self) -> bool {
+        self.supports_select_all
+    }
+}
+
+/// The application's [`TextSelection::on_context_menu`] handler.
+#[derive(Clone)]
+struct ContextMenuHandler(Rc<dyn Fn(&TextSelectionMenuRequest, &mut Window, &mut App)>);
+
+impl Global for ContextMenuHandler {}
+
+/// Asks the application's handler for the context menu of `participant`'s
+/// text at `position`, after the current update, so the handler can read
+/// any entity.
+fn open_context_menu(
+    state: &Entity<WindowSelectionState>,
+    position: Point<Pixels>,
+    participant: WeakEntity<SelectableTextState>,
+    window: &mut Window,
+    cx: &mut App,
+) {
+    let Some(ContextMenuHandler(handler)) = cx.try_global::<ContextMenuHandler>().cloned() else {
+        return;
+    };
+    state.update(cx, |state, _| state.menu_target = Some(participant.clone()));
+    window.defer(cx, move |window, cx| {
+        let supports_select_all = participant
+            .upgrade()
+            .is_some_and(|participant| participant.read(cx).select_all.is_some());
+        let request = TextSelectionMenuRequest {
+            position,
+            selected_text: TextSelection::selected_text(window, cx)
+                .trim()
+                .to_string()
+                .into(),
+            supports_select_all,
+        };
+        handler(&request, window, cx);
+    });
+}
+
 impl TextSelection {
     /// Returns whether `position` hits selectable text in the active scope.
     ///
@@ -2972,6 +3096,73 @@ impl TextSelection {
         if let Some(state) = live_text_selection_state(window, cx) {
             state.update(cx, |state, cx| state.end_edge_drag(cx));
         }
+    }
+
+    /// Calls `handler` to show the context menu of selectable text. It runs
+    /// when a right-click that no control took is let go over a participant,
+    /// such as a selectable [`TextView`](crate::TextView) or a
+    /// [`SelectableText`](crate::SelectableText), and when
+    /// [`Self::show_context_menu`] asks, as Shift-F10 and the Menu key do in
+    /// a focused text view. One handler serves the whole application, and
+    /// setting another replaces it. `gpui-component` installs one that shows
+    /// Copy and Select All.
+    ///
+    /// A right-click leaves the selection as it is, wherever it lands, so the
+    /// menu acts on it. The menu's items dispatch [`CopyTextSelection`], which
+    /// copies what Cmd-C or Ctrl-C copies, and [`SelectAllText`] when
+    /// [`TextSelectionMenuRequest::supports_select_all`]. The window's
+    /// [`crate::Root`] handles both.
+    pub fn on_context_menu(
+        handler: impl Fn(&TextSelectionMenuRequest, &mut Window, &mut App) + 'static,
+        cx: &mut App,
+    ) {
+        cx.set_global(ContextMenuHandler(Rc::new(handler)));
+    }
+
+    /// Opens the context menu of `handle`'s text at `position`, a window
+    /// position, as a right-click there would. See [`Self::on_context_menu`].
+    pub fn show_context_menu(
+        handle: &TextSelectionHandle,
+        position: Point<Pixels>,
+        window: &mut Window,
+        cx: &mut App,
+    ) {
+        if let Some(state) = live_text_selection_state(window, cx) {
+            open_context_menu(&state, position, handle.0.downgrade(), window, cx);
+        }
+    }
+
+    /// Records where a menu that acts on the selection is painted this frame,
+    /// such as a context menu GPUI draws, so that pressing it keeps the
+    /// selection as pressing an operating system menu does. Call from
+    /// prepaint or paint, every frame the menu shows.
+    pub fn register_menu(bounds: Bounds<Pixels>, window: &Window, cx: &mut App) {
+        if let Some(state) = WindowSelectionState::existing(window, cx) {
+            state.update(cx, |state, _| state.menu_bounds.push(bounds));
+        }
+    }
+
+    /// Selects all of the text the last context menu opened on, when it can,
+    /// and focuses it.
+    pub(crate) fn select_all_in_menu_target(window: &mut Window, cx: &mut App) {
+        let Some(participant) = live_text_selection_state(window, cx)
+            .and_then(|state| state.read(cx).menu_target.clone())
+            .and_then(|participant| participant.upgrade())
+        else {
+            return;
+        };
+        let (focus, select_all) = {
+            let participant = participant.read(cx);
+            (participant.on_focus.clone(), participant.select_all.clone())
+        };
+        let Some(select_all) = select_all else {
+            return;
+        };
+        Self::clear(window, cx);
+        if let Some(focus) = focus {
+            focus(window, cx);
+        }
+        select_all(window, cx);
     }
 
     /// Activates the opaque selection scope for this window.
@@ -3133,9 +3324,18 @@ impl Element for TextSelectionLayer {
         GlobalState::init(cx);
         let state = retain_text_selection_state(global_id, window, cx);
         state.read(cx).layer_painted.set(true);
-        // The handles and the menu register again as they paint this frame.
-        if state.read(cx).touch.painted_any() {
-            state.update(cx, |state, _| state.touch.begin_frame());
+        // The handles and the menus register again as they paint this frame.
+        let (touch_painted, menu_painted) = {
+            let state = state.read(cx);
+            (state.touch.painted_any(), !state.menu_bounds.is_empty())
+        };
+        if touch_painted || menu_painted {
+            state.update(cx, |state, _| {
+                if touch_painted {
+                    state.touch.begin_frame();
+                }
+                state.menu_bounds.clear();
+            });
         }
         TextSelectionLayerPrepaintState(state)
     }
@@ -3271,9 +3471,10 @@ fn paint_text_selection(state: &Entity<WindowSelectionState>, window: &mut Windo
         let Some(state) = mouse_down_state.upgrade() else {
             return;
         };
-        // A press on a handle or on the edit menu acts on the selection; it
-        // must not clear it.
-        if state.read(cx).touch.covers(event.position) {
+        // A press on a handle, on the edit menu or on a context menu acts on
+        // the selection, so it must not clear it.
+        if state.read(cx).touch.covers(event.position) || state.read(cx).covers_menu(event.position)
+        {
             return;
         }
         if phase.capture() {
@@ -3289,7 +3490,16 @@ fn paint_text_selection(state: &Entity<WindowSelectionState>, window: &mut Windo
             dispatch_clear_handlers(handlers, cx);
         } else if event.click_count == 1 {
             if GlobalState::is_text_selection_suppressed(cx) {
-                state.update(cx, |state, _| state.pending_extension_anchor = None);
+                // The press kept what a Shift-press extends, and nothing
+                // extends it now.
+                let handlers = state.update(cx, |state, cx| {
+                    if state.pending_extension_anchor.take().is_some() {
+                        state.clear_state(cx)
+                    } else {
+                        Vec::new()
+                    }
+                });
+                dispatch_clear_handlers(handlers, cx);
                 return;
             }
             state.update(cx, |state, cx| {
@@ -3314,6 +3524,50 @@ fn paint_text_selection(state: &Entity<WindowSelectionState>, window: &mut Windo
                 }
             });
             WindowSelectionState::resolve_content_keys(&state, cx);
+        }
+    });
+
+    // A right-click on selectable text opens its context menu when it is let
+    // go, unless a control under it took the press (an input, or an element
+    // with a context menu of its own), and leaves the selection as it is.
+    let context_menu_state = state.downgrade();
+    window.on_mouse_event(move |event: &MouseDownEvent, phase, window, cx| {
+        if event.button != MouseButton::Right {
+            return;
+        }
+        let Some(state) = context_menu_state.upgrade() else {
+            return;
+        };
+        if phase.capture() {
+            GlobalState::init(cx);
+            GlobalState::reset_text_selection_suppression(cx);
+            state.update(cx, |state, _| state.pending_context_menu = None);
+            return;
+        }
+        if !phase.bubble()
+            || GlobalState::is_text_selection_suppressed(cx)
+            || GlobalState::is_in_deferred_context(cx)
+            || state.read(cx).covers_menu(event.position)
+        {
+            return;
+        }
+        state.update(cx, |state, cx| {
+            state.pending_context_menu = state
+                .context_menu_participant(event.position, window, cx)
+                .map(|participant| (event.position, participant));
+        });
+    });
+    let context_menu_state = state.downgrade();
+    window.on_mouse_event(move |event: &MouseUpEvent, phase, window, cx| {
+        if event.button != MouseButton::Right || !phase.bubble() {
+            return;
+        }
+        let Some(state) = context_menu_state.upgrade() else {
+            return;
+        };
+        let pending = state.update(cx, |state, _| state.pending_context_menu.take());
+        if let Some((position, participant)) = pending {
+            open_context_menu(&state, position, participant, window, cx);
         }
     });
 
@@ -3442,9 +3696,11 @@ fn paint_text_selection(state: &Entity<WindowSelectionState>, window: &mut Windo
         }
     });
 
+    // On capture, so a drop target or any other handler that stops the
+    // release can't leave the selection following the pointer.
     let mouse_up_state = state.downgrade();
     window.on_mouse_event(move |_: &MouseUpEvent, phase, _, cx| {
-        if phase.bubble()
+        if phase.capture()
             && let Some(state) = mouse_up_state.upgrade()
         {
             state.update(cx, |state, cx| {
@@ -3513,12 +3769,11 @@ pub(crate) fn clear_window_text_selection(window_id: gpui::WindowId, cx: &mut Ap
 mod tests {
     use super::*;
     use crate::ElementExt as _;
-    #[cfg(feature = "gpui-fast")]
-    use gpui::StatefulInteractiveElement as _;
     use gpui::{
         Bounds, ContentMask, Context, Hitbox, HitboxBehavior, HitboxId, InteractiveElement as _,
-        IntoElement, ParentElement as _, Render, SharedString, Styled as _, StyledText,
-        TestAppContext, TextLayout, Window, div, point, prelude::FluentBuilder as _, px, size,
+        IntoElement, ParentElement as _, Render, SharedString, StatefulInteractiveElement as _,
+        Styled as _, StyledText, TestAppContext, TextLayout, Window, div, point,
+        prelude::FluentBuilder as _, px, size,
     };
     use std::{
         cell::{Cell, RefCell},
@@ -3554,6 +3809,58 @@ mod tests {
     struct PlainRunLayoutView {
         texts: Vec<SharedString>,
         layouts: Vec<TextLayout>,
+    }
+
+    /// A splitter handle on the left and selectable text on the right, under a
+    /// root that takes the drop, the way an application resizes a pane.
+    struct SplitterView {
+        selection: TextSelectionHandle,
+        drops: Rc<Cell<usize>>,
+    }
+
+    struct SplitterDrag;
+
+    impl Render for SplitterDrag {
+        fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+            div()
+        }
+    }
+
+    impl Render for SplitterView {
+        fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+            let selection = self.selection.clone();
+            let drops = self.drops.clone();
+            div().size_full().child(TextSelectionLayer).child(
+                div()
+                    .size_full()
+                    .on_drop(move |_: &SplitterDrag, _, _| drops.set(drops.get() + 1))
+                    .child(
+                        div()
+                            .id("handle")
+                            .absolute()
+                            .left(px(90.))
+                            .w(px(10.))
+                            .h_full()
+                            .on_drag(SplitterDrag, |_, _, _, cx| cx.new(|_| SplitterDrag)),
+                    )
+                    .child(
+                        div()
+                            .absolute()
+                            .left(px(100.))
+                            .w(px(100.))
+                            .h_full()
+                            .on_prepaint(move |bounds, window, cx| {
+                                let hitbox = window.insert_hitbox(bounds, HitboxBehavior::Normal);
+                                selection.register(
+                                    TextSelectionRegistration::new(hitbox, bounds)
+                                        .with_text_bounds(vec![bounds]),
+                                    window,
+                                    cx,
+                                );
+                            }),
+                    ),
+            )
+        }
     }
 
     impl Render for WindowSelectionView {
@@ -5826,5 +6133,32 @@ mod tests {
         press_at(text, 5, 1, false, cx);
         assert_eq!(drag_to(text, 9, cx), "wo t");
         release(1, cx);
+    }
+
+    #[gpui::test]
+    fn a_drag_that_drops_on_an_ancestor_does_not_leave_the_selection_following_the_pointer(
+        cx: &mut TestAppContext,
+    ) {
+        let drops = Rc::new(Cell::new(0));
+        let (_, cx) = cx.add_window_view(|_, cx| SplitterView {
+            selection: TextSelectionHandle::new("text", cx),
+            drops: drops.clone(),
+        });
+        cx.update(|window, cx| {
+            let _ = window.draw(cx);
+        });
+        let modifiers = gpui::Modifiers::default();
+        let handle = point(px(95.), px(10.));
+
+        cx.simulate_mouse_down(handle, MouseButton::Left, modifiers);
+        cx.simulate_mouse_move(point(px(60.), px(10.)), Some(MouseButton::Left), modifiers);
+        cx.simulate_mouse_move(point(px(40.), px(10.)), Some(MouseButton::Left), modifiers);
+        // The ancestor's drop takes the release.
+        cx.simulate_mouse_up(point(px(40.), px(10.)), MouseButton::Left, modifiers);
+        assert_eq!(drops.get(), 1);
+        cx.simulate_mouse_move(point(px(150.), px(10.)), None, modifiers);
+        cx.simulate_mouse_move(point(px(180.), px(10.)), None, modifiers);
+
+        cx.update(|window, cx| assert!(!TextSelection::has_selection(window, cx)));
     }
 }

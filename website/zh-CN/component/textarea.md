@@ -79,7 +79,38 @@ cx.subscribe(&notes, |this, state, event: &InputEvent, cx| {
 ```
 
 `TextareaState` 还提供 `insert`、`replace`、`cursor_position`、
-`soft_wrap`、`searchable` 和 `submit_on_enter`。
+`soft_wrap` 和 `searchable`。
+
+## 发送键
+
+聊天输入框需要用某个按键发送消息，而不是换行。`submit_keys` 指定哪些 Enter 组合键用于提交：`SubmitKey::Enter`、`SubmitKey::ShiftEnter` 和 `SubmitKey::SecondaryEnter`（macOS 上为 Cmd+Enter，其他平台为 Ctrl+Enter）中的任意几个。提交键不会插入任何内容：Textarea 发出 `InputEvent::PressEnter`，并把 `Enter` action 继续传给外层元素。其余组合键照常换行。默认没有提交键，所有组合键都换行。
+
+```rust
+use gpui_kit::component::input::{InputEvent, SubmitKey, TextareaState};
+
+let composer = cx.new(|cx| {
+    TextareaState::new(window, cx)
+        .auto_grow(1, 5)
+        .submit_keys([SubmitKey::Enter, SubmitKey::SecondaryEnter])
+});
+
+cx.subscribe_in(&composer, window, |this, state, event: &InputEvent, window, cx| {
+    if let InputEvent::PressEnter { secondary, shift } = event
+        && state.read(cx).is_submit_chord(*secondary, *shift)
+    {
+        this.send(state.read(cx).value());
+        state.update(cx, |state, cx| state.set_value("", window, cx));
+    }
+});
+```
+
+换行的组合键同样会发出 `PressEnter`，所以发送前要先用 `is_submit_chord`（或 `SubmitKey::matches`）判断。`set_submit_keys` 可在运行时修改提交键，适合让用户自行选择的设置项；`SubmitKey` 在设置文件中序列化为 `"enter"`、`"shift_enter"` 和 `"secondary_enter"`。`submit_on_enter(true)` 等同于 `submit_keys([SubmitKey::Enter, SubmitKey::SecondaryEnter])`。
+
+提交键会继续传给 Textarea 外层的快捷键，因此如果在外层也绑定了 Cmd+Enter 或 Ctrl+Enter 来发送，按一次就会发送两次。请只在 `PressEnter` 或外层绑定中的一处发送。输入法正在组字时，Enter 只会确认组字内容，既不提交也不换行。单行输入框无论提交键如何设置，都会把 Enter 继续传给外层。
+
+## 平滑光标
+
+`smooth_caret(true)` 会让光标在输入、删除和使用方向键时沿所在行滑动，输入的字符在光标经过时才显示出来。`set_app_smooth_caret` 可为所有未自行设置的输入框开启它。选项以及光标何时立即移动，见 [Input：平滑光标](./input.md#平滑光标)。
 
 ## 尺寸
 

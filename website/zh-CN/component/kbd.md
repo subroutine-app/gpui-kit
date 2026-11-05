@@ -7,6 +7,8 @@ description: 以符合平台习惯的方式显示键盘快捷键。
 
 Kbd 用于展示键盘快捷键和组合键，并会自动根据平台采用合适的显示格式。macOS 会使用符号，Windows 和 Linux 则使用文本标签，便于文档、菜单和帮助面板保持一致的快捷键表达。
 
+快捷键以键帽形式绘制：一个小圆角按键，上面显示完整的快捷键，例如 `Ctrl+Shift+Z` 或 `⇧⌘Z`，并使用主题的等宽字体。
+
 ## 导入
 
 ```rust
@@ -80,6 +82,8 @@ if let Some(kbd) = Kbd::binding_for_action_in(&MyAction {}, &focus_handle, windo
     // 显示焦点元素上的快捷键
 }
 ```
+
+由多个连续按键组成的绑定（例如 Emacs 的 `ctrl-x ctrl-s`）会为每个按键各显示一个键帽。
 
 ## 平台差异
 
@@ -179,16 +183,7 @@ div().child(format!("Shortcut: {}", shortcut_text))
 
 ## 样式
 
-Kbd 默认包含以下样式：
-
-- 使用主题边框颜色绘制边框
-- 使用 muted 前景色显示文字
-- 使用主题背景色作为底色
-- 小圆角
-- 文本居中
-- 超小字号
-- 极小的内边距
-- 最小宽度为 5
-- 禁止 flex shrink，避免压缩失真
+键帽以主题的 `muted.foreground` 显示文字，底色为 `muted.background`，边缘颜色取自 `muted.foreground` 且底边略粗，因此在菜单的高亮行上也能看清键帽。`outline()` 会改用主题背景色填充键帽。
+文字使用主题的 `mono_font_family`，字号比超小字号再小一级（`0.6875rem`），因为同样字号下等宽字体看起来比界面字体更大；可通过 `font_family` 换用其他字体。圆角跟随主题的 radius。
 
 所有样式都可以通过 `Styled` trait 的方法覆盖。

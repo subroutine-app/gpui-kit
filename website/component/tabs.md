@@ -75,6 +75,15 @@ TabBar::new("outline-tabs")
 
 #### Segmented Tabs
 
+The selected option has a `secondary` fill, a thin outline and a medium-weight label. Where
+`secondary` sits too close to the track, the fill is a light foreground tint instead. The outline is
+the foreground at low opacity, a little stronger in themes whose colors sit close together, so it
+always shows. Other options use muted text that brightens on hover. Disabled options are dimmer and
+are skipped by the keyboard. The track is the window background, or `tab_bar.segmented.background`
+where a theme sets it, inside a 1 px outline in the `border` color. That outline is softened in
+themes with strong borders and strengthened where the border barely shows. Every option reserves the width of its medium-weight label, so changing the selection never
+moves the others. The selected option's corners are concentric with the track's.
+
 ```rust
 use gpui_kit::component::IconName;
 
@@ -282,6 +291,19 @@ TabBar::new("custom-tabs")
     )
 ```
 
+## Keyboard
+
+A `TabBar` is one Tab stop. Tab and Shift-Tab reach it on the selected tab, and the arrow keys move focus between its tabs.
+
+| Key | Behavior |
+| --- | --- |
+| `←` / `→` | Move focus to the previous / next enabled tab, wrapping at the ends |
+| `Home` / `End` | Move focus to the first / last enabled tab |
+| `Enter` / `Space` | Select the focused tab, through `TabBar::on_click` or the tab's own `on_click` |
+| `Tab` | Leave the tab bar |
+
+Moving focus leaves the selection alone until Enter or Space. Disabled tabs are skipped. A tab that takes focus scrolls into view and shows a focus ring. Pressing a tab with the pointer selects it and leaves focus where it was, so a tab bar above an editor leaves the editor focused.
+
 ## API Reference
 
 ### TabBar
@@ -296,7 +318,7 @@ TabBar::new("custom-tabs")
 | `prefix(element)`           | Add element before the tabs                        |
 | `suffix(element)`           | Add element after the tabs                         |
 | `last_empty_space(element)` | Custom element for empty space at the end          |
-| `track_scroll(handle)`      | Track scrolling with a handle to reveal a tab explicitly; clicking a tab scrolls it into view with part of the next tab showing |
+| `track_scroll(handle)`      | Track scrolling with a handle to reveal a tab explicitly; clicking a tab scrolls it into view with part of the next tab showing, and a tab that takes keyboard focus scrolls into view |
 | `with_menu(bool)`           | Enable dropdown menu for tab selection             |
 | `max_width(width)`      | Set maximum width of each tab; truncates           |
 

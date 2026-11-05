@@ -44,6 +44,40 @@ The complete implementation used by the runnable showcase is embedded directly f
 
 The command above supplies application initialization, window creation, and shared `BaseShowcase` state.
 
+## Keyboard
+
+`Tabs::roving_focus` gives a tab list the keyboard behavior of a desktop tab control. A `RovingFocus` keeps one focus handle per tab, and the list is one Tab stop, on the current tab. Left and Right move focus to the previous and next enabled tab, wrapping at the ends, and Home and End move to the first and last. Enter or Space on the focused tab runs its `on_click`.
+
+```rust
+use gpui_kit::base::{RovingFocus, Tab, Tabs};
+
+impl Render for Preferences {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let labels = ["General", "Appearance", "Advanced"];
+        let focus = RovingFocus::keyed("preferences-tabs-focus", window, cx);
+        focus.set_items(labels.iter().map(|_| true), Some(self.selected), cx);
+
+        Tabs::new("preferences-tabs")
+            .roving_focus(&focus)
+            .flex()
+            .children(labels.into_iter().enumerate().map(|(ix, label)| {
+                Tab::new(ix)
+                    .selected(ix == self.selected)
+                    .track_focus(&focus.handle(ix).unwrap())
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        this.selected = ix;
+                        cx.notify();
+                    }))
+                    .child(label)
+            }))
+    }
+}
+```
+
+Other composite controls whose items share one Tab stop, such as a vertical list, can use `RovingFocus` directly and call `move_focus` from their key handlers.
+
+A control in a scrolling container can scroll the item that takes focus into view. `track_scroll` takes the `ScrollHandle` of a container with one child per item. `track_list_scroll` takes the `ListState` of a GPUI `list` whose items may each hold many of the control's items, as in a sidebar. `track_container_scroll` takes the `ScrollHandle` of a container that holds the control at any depth, among other content. With either of the last two, each item reports where it is drawn with `item_prepainted`. The list or container scrolls by the least distance that shows an item that took focus from the keyboard, and it doesn't scroll when the item is in view already.
+
 ## Accessibility
 
 Associate tabs with panels, expose selection, and support keyboard traversal.

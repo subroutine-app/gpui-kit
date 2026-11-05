@@ -899,6 +899,11 @@ mod measurement_tests {
             .advance_clock(std::time::Duration::from_millis(200));
         cx.update(|window, cx| window.draw(cx).clear(cx));
         wheel(cx, 2.);
+        // The notch eases in over 80 ms.
+        cx.update(|window, cx| window.draw(cx).clear(cx));
+        cx.executor()
+            .advance_clock(std::time::Duration::from_millis(100));
+        cx.update(|window, cx| window.draw(cx).clear(cx));
         assert!(state.read_with(cx, |state, _| state.scroll_handle.offset().y) > end);
     }
 
@@ -975,5 +980,84 @@ mod measurement_tests {
                 div()
             },
         );
+    }
+
+    /// A list 120 px tall with 30 rows, inside a page that scrolls.
+    struct NestedListTest {
+        list: gpui::Entity<ListState<Delegate>>,
+    }
+
+    impl gpui::Render for NestedListTest {
+        fn render(
+            &mut self,
+            _: &mut gpui::Window,
+            _: &mut gpui::Context<Self>,
+        ) -> impl gpui::IntoElement {
+            use crate::scroll::ScrollableElement as _;
+            gpui::div()
+                .w(gpui::px(200.))
+                .h(gpui::px(200.))
+                .overflow_y_scrollbar()
+                .child(
+                    crate::v_flex()
+                        .child(
+                            gpui::div()
+                                .h(gpui::px(40.))
+                                .flex_shrink_0()
+                                .debug_selector(|| "page-first-row".into()),
+                        )
+                        .child(
+                            gpui::div()
+                                .h(gpui::px(120.))
+                                .flex_shrink_0()
+                                .child(crate::list::List::new(&self.list)),
+                        )
+                        .child(gpui::div().h(gpui::px(400.)).flex_shrink_0()),
+                )
+        }
+    }
+
+    #[gpui::test]
+    fn the_wheel_over_a_list_in_a_scrolling_page_moves_only_the_list(cx: &mut TestAppContext) {
+        use gpui::{AppContext as _, px};
+
+        cx.update(crate::init);
+        let (view, cx) = cx.add_window_view(|window, cx| NestedListTest {
+            list: cx.new(|cx| ListState::new(Delegate { counts: vec![30] }, window, cx)),
+        });
+        let cx: &mut gpui::VisualTestContext = cx;
+        let draw = |cx: &mut gpui::VisualTestContext| {
+            cx.run_until_parked();
+            cx.update(|window, cx| {
+                _ = window.draw(cx);
+            });
+        };
+        let wheel = |cx: &mut gpui::VisualTestContext, y: f32, dy: f32| {
+            cx.simulate_event(gpui::ScrollEvent {
+                position: gpui::point(px(10.), px(y)),
+                delta: gpui::ScrollDelta::Pixels(gpui::point(px(0.), px(dy))),
+                ..Default::default()
+            });
+        };
+        draw(cx);
+        let list = cx.update(|_, cx| view.read(cx).list.clone());
+        let list_offset = |cx: &mut gpui::VisualTestContext| {
+            cx.update(|_, cx| list.read(cx).scroll_handle().offset().y)
+        };
+        let page = cx.debug_bounds("page-first-row").unwrap().top();
+
+        wheel(cx, 100., -50.);
+        draw(cx);
+        assert_eq!(list_offset(cx), px(-50.));
+        assert_eq!(cx.debug_bounds("page-first-row").unwrap().top(), page);
+
+        // The page itself, above the list, still scrolls.
+        wheel(cx, 20., -30.);
+        draw(cx);
+        assert_eq!(
+            cx.debug_bounds("page-first-row").unwrap().top(),
+            page - px(30.)
+        );
+        assert_eq!(list_offset(cx), px(-50.));
     }
 }

@@ -36,6 +36,8 @@ cargo run -p gpui-base-examples -- scrollbar
 
 Base 不附带产品动画。默认仅有 2 秒行为性空闲等待，进入、退出和展开时长均为零。`Fade` 原地淡入；`SlideAndFade` 让纵向滚动条从右侧、横向滚动条从底部进入。被中断的过渡从当前视觉值反向；零时长立即采用目标值。GPUI 的减少动态效果偏好也会把可见性和宽度时长降为零。
 
+退出时不透明度与位置都使用 cubic ease-in，滑块一边淡出一边朝进入时的边缘离开。淡入淡出和滑动以绘制效果运行，窗口会请求它们的每一帧，而滚动条所在的视图不会因此重新渲染，所以长列表在淡出时保持缓存。可见性、空闲计时和拖动节流都按窗口的时钟计时，测试中可用 `advance_clock` 推进。
+
 ## 自定义视口与句柄
 
 默认视口来自 `ScrollbarHandle::viewport_bounds`。组合控件可用 `.viewport_bounds(bounds)` 指定绘制视口，或 `.viewport_from_layout()` 使用覆盖层布局；只有句柄无法报告完整范围时才用 `.scroll_size(...)` 覆盖内容尺寸。`ScrollHandle`、`UniformListScrollHandle` 和 `ListState` 已实现 `ScrollbarHandle`；自定义容器需实现视口、偏移、设置偏移和内容尺寸，必要时实现 `start_drag` / `end_drag`。

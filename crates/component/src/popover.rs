@@ -1,36 +1,29 @@
 use gpui::{
-    Anchor, Animation, AnimationExt as _, AnyElement, App, Bounds, Context, Div, ElementId,
-    FocusHandle, InteractiveElement as _, IntoElement, MouseButton, ParentElement, PathBuilder,
-    Pixels, Point, RenderOnce, Stateful, StyleRefinement, Styled, Window, canvas, point,
+    Anchor, Animation, AnimationElement, AnimationExt as _, AnyElement, App, Bounds, Context,
+    ElementId, FocusHandle, InteractiveElement as _, IntoElement, MouseButton, ParentElement,
+    PathBuilder, Pixels, Point, RenderOnce, StyleRefinement, Styled, Window, canvas, point,
     prelude::FluentBuilder as _, px,
 };
 use std::{cell::Cell, rc::Rc, time::Duration};
 
 use crate::{ActiveTheme as _, ThemeStyled as _};
-use crate::{
-    Selectable, StyledExt as _,
-    animation::ease_out_cubic,
-    styled::{popover_ring, popover_shadow},
-    v_flex,
-};
+use crate::{Selectable, StyledExt as _, animation::ease_out_cubic, styled::popover_ring, v_flex};
 use gpui_base::Placement;
 use gpui_base::Popover as BasePopover;
 pub use gpui_base::PopoverState;
 
 pub(crate) fn init(_: &mut App) {}
 
-/// How long a dropdown takes to settle into place after it opens.
+/// How long a popup surface takes to settle into place after it opens.
 ///
 /// This is shadcn/ui's figure: its popup surfaces carry `animate-in`, whose
 /// duration is 150ms.
-const DROPDOWN_ENTER_DURATION: Duration = Duration::from_millis(150);
+const POPUP_ENTER_DURATION: Duration = Duration::from_millis(150);
 
-/// Where a dropdown starts out, relative to where it comes to rest.
-///
-/// Negative is above, so the surface slides *down* out of the trigger's edge —
-/// what shadcn/ui expresses as `data-[side=bottom]:slide-in-from-top-2`. Its
-/// `2` is `0.5rem`, which is 8px at the default root size.
-const DROPDOWN_ENTER_OFFSET: Pixels = px(-8.);
+/// How far a popup surface travels away from its anchor while it settles —
+/// shadcn/ui's `slide-in-from-*-2`, whose `2` is `0.5rem`, 8px at the default
+/// root size.
+const POPUP_ENTER_TRAVEL: Pixels = px(8.);
 
 fn dropdown_positioner(bounds: Bounds<Pixels>) -> gpui_base::Positioner {
     gpui_base::Positioner::side(bounds)
@@ -40,17 +33,25 @@ fn dropdown_positioner(bounds: Bounds<Pixels>) -> gpui_base::Positioner {
         .margin(px(8.))
 }
 
-/// Positions a dropdown surface under its trigger and animates it in.
+/// Plays the open motion every popup surface shares.
 ///
-/// This is the shared open motion for Select, Combobox and DatePicker, modelled
-/// on shadcn/ui: over 150ms the surface fades up from nothing while sliding the
-/// last 8px out of the trigger's edge, on an ease-out curve so it decelerates
-/// into place.
+/// Modelled on shadcn/ui: over 150ms the surface fades up from nothing while
+/// sliding the last 8px away from its anchor, on an ease-out curve so it
+/// decelerates into place. `side` is the side of the anchor the surface opens
+/// on, so a surface below its trigger slides down out of the trigger's edge and
+/// a submenu to the right of its parent slides right.
+///
+/// The motion plays once per mount. GPUI keeps an animation's start time in
+/// element state, which survives re-renders while the surface stays on screen
+/// and is dropped on the first frame it is not, so each open starts over
+/// without the caller minting a fresh id.
 ///
 /// `surface` must be the panel itself — the element carrying
 /// [`ThemeStyled::popover_style`] — and not a wrapper around it. GPUI takes a
 /// shadow's shape from the element it is set on, so a wrapper of a different
-/// size would throw the shadow out of register with the panel.
+/// size would throw the shadow out of register with the panel. The slide is a
+/// relative `top` or `left` offset, so the surface must not set that inset
+/// itself; put any resting gap on a wrapper.
 ///
 /// # Why the shadow is animated too
 ///
@@ -59,9 +60,9 @@ fn dropdown_positioner(bounds: Bounds<Pixels>) -> gpui_base::Positioner {
 /// painted as a full blurred rect *under* the element — the shader only cuts the
 /// element out of `inset` shadows — so a translucent panel does not hide its own
 /// shadow, and mid-fade the shadow shows straight through the panel as a dark
-/// slab. Ramping the ink by the cube of the fade keeps it out of sight until the
-/// panel is opaque enough to cover it, and still lands on the resting shadow
-/// [`popover_shadow`] gives every other popup.
+/// slab. Ramping the surface's own shadow ink by the cube of the fade keeps it
+/// out of sight until the panel is opaque enough to cover it, and lands exactly
+/// on whatever shadow the surface rests with.
 ///
 /// # Departures from shadcn
 ///
@@ -69,38 +70,71 @@ fn dropdown_positioner(bounds: Bounds<Pixels>) -> gpui_base::Positioner {
 ///   element transform — only images and SVGs take a `TransformationMatrix` —
 ///   so there is nothing to scale a subtree with, and the fade and slide carry
 ///   the motion on their own.
-/// - There is no exit motion. A closing dropdown stops being rendered in the
-///   same frame its state flips, so playing one would mean keeping the surface
-///   mounted past the close, which is a change to how each of these components
-///   tracks `open`.
-/// - The slide always comes from above. [`gpui_base::Positioner`] resolves the
-///   side the surface actually lands on during layout and does not report it
-///   back, so a dropdown that flips above its trigger for want of room below
-///   slides the opposite way — 8px over 150ms, in the rare case where it
-///   happens.
+/// - There is no exit motion. A closing popup stops being rendered in the same
+///   frame its state flips, so playing one would mean keeping the surface
+///   mounted past the close, which is a change to how each popup tracks `open`.
 ///
 /// Reduced motion needs no handling here: GPUI's animation element adopts the
 /// final value on the first frame when the system asks for it.
+pub(crate) fn popup_entrance<E>(
+    id: impl Into<ElementId>,
+    surface: E,
+    side: Placement,
+) -> AnimationElement<E>
+where
+    E: IntoElement + Styled + 'static,
+{
+    let travel = f32::from(POPUP_ENTER_TRAVEL);
+
+    surface.with_animation(
+        id,
+        Animation::new(POPUP_ENTER_DURATION).with_easing(ease_out_cubic),
+        move |mut surface, delta| {
+            let lag = px(travel * (1. - delta));
+            let ink = delta * delta * delta;
+            let style = surface.style();
+            style.opacity = Some(style.opacity.unwrap_or(1.) * delta);
+            for shadow in style.box_shadow.iter_mut().flatten() {
+                shadow.color.a *= ink;
+            }
+            match side {
+                Placement::Bottom => surface.top(-lag),
+                Placement::Top => surface.top(lag),
+                Placement::Right => surface.left(-lag),
+                Placement::Left => surface.left(lag),
+            }
+        },
+    )
+}
+
+/// The side of its trigger a popup opened with `anchor` lands on.
+///
+/// An anchor names the popup's own corner, so `TopLeft` opens below the
+/// trigger and `RightCenter` to its left. Anchored popups clamp to the window
+/// rather than flip, so this is also the side they are drawn on.
+pub(crate) fn anchor_side(anchor: Anchor) -> Placement {
+    match anchor {
+        Anchor::TopLeft | Anchor::TopCenter | Anchor::TopRight => Placement::Bottom,
+        Anchor::BottomLeft | Anchor::BottomCenter | Anchor::BottomRight => Placement::Top,
+        Anchor::LeftCenter => Placement::Right,
+        Anchor::RightCenter => Placement::Left,
+    }
+}
+
+/// Positions a dropdown surface under its trigger and animates it in with
+/// [`popup_entrance`].
+///
+/// This is the open path for Select, Combobox and DatePicker. The slide always
+/// comes from above: [`gpui_base::Positioner`] resolves the side the surface
+/// actually lands on during layout and does not report it back, so a dropdown
+/// that flips above its trigger for want of room below slides the opposite way
+/// — 8px over 150ms, in the rare case where it happens.
 pub(crate) fn dropdown_popup(
     id: impl Into<ElementId>,
     bounds: Bounds<Pixels>,
     surface: impl IntoElement + Styled + 'static,
-    cx: &App,
 ) -> gpui_base::Positioner {
-    let travel: f32 = DROPDOWN_ENTER_OFFSET.into();
-    // Read out here: the animation runs long after `cx` is gone.
-    let ring = popover_ring(cx);
-
-    dropdown_positioner(bounds).child(surface.with_animation(
-        id,
-        Animation::new(DROPDOWN_ENTER_DURATION).with_easing(ease_out_cubic),
-        move |surface, delta| {
-            surface
-                .top(px(travel * (1. - delta)))
-                .opacity(delta)
-                .shadow(popover_shadow(ring, delta * delta * delta))
-        },
-    ))
+    dropdown_positioner(bounds).child(popup_entrance(id, surface, Placement::Bottom))
 }
 
 /// A popover element that can be triggered by a button or any other element.
@@ -294,29 +328,10 @@ impl Styled for Popover {
     }
 }
 
-impl Popover {
-    pub(crate) fn render_popover_content(
-        anchor: Anchor,
-        appearance: bool,
-        _: &mut Window,
-        cx: &mut App,
-    ) -> Stateful<Div> {
-        v_flex()
-            .id("content")
-            .occlude()
-            .tab_group()
-            .when(appearance, |this| this.popover_style(cx).p_3())
-            .map(|this| match anchor {
-                Anchor::TopLeft | Anchor::TopCenter | Anchor::TopRight => this.top_1(),
-                Anchor::BottomLeft | Anchor::BottomCenter | Anchor::BottomRight => this.bottom_1(),
-                Anchor::LeftCenter | Anchor::RightCenter => this.top_1(), // Fallback for centered
-            })
-    }
-}
-
 impl RenderOnce for Popover {
     fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
         let anchor = self.anchor;
+        let side = anchor_side(anchor);
         let arrow_size = if self.arrow {
             window.rem_size() * 0.375
         } else {
@@ -348,7 +363,7 @@ impl RenderOnce for Popover {
             .default_open(self.default_open)
             .overlay_closable(self.overlay_closable)
             .content(move |state, window, cx| {
-                v_flex()
+                let surface = v_flex()
                     .id("content")
                     .occlude()
                     .tab_group()
@@ -400,7 +415,14 @@ impl RenderOnce for Popover {
                             .inset_0()
                             .size_full(),
                         )
-                    })
+                    });
+                // Without its appearance the caller owns the surface, and with
+                // it the motion: a dropdown menu animates its own panel.
+                if appearance {
+                    popup_entrance("enter", surface, side).into_any_element()
+                } else {
+                    surface.into_any_element()
+                }
             })
             .when_some(self.trigger, |this, trigger| this.trigger_with(trigger))
             .when_some(trigger_style, |this, style| this.refine_style(&style))
@@ -417,16 +439,17 @@ impl RenderOnce for Popover {
 
 /// The arrow follows the named anchor instead of always aiming at trigger center.
 fn arrow_anchor(anchor: Anchor, trigger: Bounds<Pixels>) -> (Placement, Point<Pixels>) {
-    match anchor {
-        Anchor::TopLeft => (Placement::Bottom, trigger.bottom_left()),
-        Anchor::TopCenter => (Placement::Bottom, trigger.bottom_center()),
-        Anchor::TopRight => (Placement::Bottom, trigger.bottom_right()),
-        Anchor::BottomLeft => (Placement::Top, trigger.origin),
-        Anchor::BottomCenter => (Placement::Top, trigger.top_center()),
-        Anchor::BottomRight => (Placement::Top, trigger.top_right()),
-        Anchor::LeftCenter => (Placement::Right, trigger.right_center()),
-        Anchor::RightCenter => (Placement::Left, trigger.left_center()),
-    }
+    let target = match anchor {
+        Anchor::TopLeft => trigger.bottom_left(),
+        Anchor::TopCenter => trigger.bottom_center(),
+        Anchor::TopRight => trigger.bottom_right(),
+        Anchor::BottomLeft => trigger.origin,
+        Anchor::BottomCenter => trigger.top_center(),
+        Anchor::BottomRight => trigger.top_right(),
+        Anchor::LeftCenter => trigger.right_center(),
+        Anchor::RightCenter => trigger.left_center(),
+    };
+    (anchor_side(anchor), target)
 }
 
 /// Clamp the arrow base clear of rounded corners while aiming at the trigger.
@@ -948,13 +971,12 @@ mod tests {
     }
 
     impl Render for Harness {
-        fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
             div().size_full().when(self.open, |this| {
                 this.child(dropdown_popup(
                     "dropdown",
                     Bounds::new(point(px(0.), px(100.)), size(px(120.), px(30.))),
                     div().debug_selector(|| "surface".into()).size(px(50.)),
-                    cx,
                 ))
             })
         }
@@ -974,7 +996,7 @@ mod tests {
         let opening = window.debug_bounds("surface").unwrap().origin;
 
         // The animation runs on the test clock, so settling is stepped.
-        executor.advance_clock(DROPDOWN_ENTER_DURATION * 4);
+        executor.advance_clock(POPUP_ENTER_DURATION * 4);
         window.update(|window, cx| crate::test_redraw(window, cx));
         let settled = window.debug_bounds("surface").unwrap().origin;
 

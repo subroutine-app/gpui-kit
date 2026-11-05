@@ -848,7 +848,6 @@ impl RenderOnce for DatePicker {
                                             }),
                                     ),
                             ),
-                        cx,
                     ))
                     .with_priority(gpui_base::POPUP_PRIORITY),
                 )

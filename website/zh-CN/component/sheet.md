@@ -90,6 +90,19 @@ window.open_sheet(cx, |sheet, _, _| {
 })
 ```
 
+### 过渡
+
+Sheet 会在 150 ms 内滑入。`transition_duration(Duration::ZERO)` 会让它直接出现在最终位置。
+
+```rust
+window.open_sheet(cx, |sheet, _, _| {
+    sheet
+        .title("Sessions")
+        .transition_duration(Duration::ZERO)
+        .child("Sheet content")
+})
+```
+
 ### 可调整大小
 
 ```rust
@@ -157,6 +170,7 @@ window.close_sheet(cx);
 - `overlay(bool)`
 - `overlay_closable(bool)`
 - `on_close(fn)`
+- `transition_duration(duration)`
 
 ## 最佳实践
 

@@ -3,7 +3,7 @@ use crate::{
     scroll::ScrollbarMode, sheet::SheetSettings,
 };
 use gpui::{
-    App, Global, Hsla, IsZero as _, Pixels, SharedString, Window, WindowAppearance,
+    App, FontFeatures, Global, Hsla, IsZero as _, Pixels, SharedString, Window, WindowAppearance,
     prelude::FluentBuilder as _, px,
 };
 pub use gpui_base::{
@@ -20,6 +20,8 @@ use std::{
 };
 
 mod color;
+mod font_overrides;
+mod glass_tokens;
 mod mono_font;
 mod motion;
 mod registry;
@@ -28,6 +30,8 @@ mod system_font;
 mod theme_color;
 
 pub use color::*;
+pub use font_overrides::FontOverrides;
+pub use glass_tokens::*;
 pub use motion::*;
 pub use registry::*;
 pub use schema::*;
@@ -185,6 +189,13 @@ pub struct Theme {
     pub mono_font_family: SharedString,
     /// The monospace font size for the application, default is 13px.
     pub mono_font_size: Pixels,
+    /// The OpenType features of the monospace font, e.g. `calt` and `liga`
+    /// turned off to show code without ligatures. Empty, the default, keeps
+    /// the font's own. Set it with
+    /// [`FontOverrides::with_mono_font_features`] to keep it across theme
+    /// changes.
+    #[serde(default)]
+    pub mono_font_features: FontFeatures,
     /// Radius for the general elements.
     pub radius: Pixels,
     /// Radius for the large elements, e.g.: Dialog, Notification border radius.
@@ -213,9 +224,17 @@ pub struct Theme {
     /// Semantic motion policy for styled components.
     #[serde(skip)]
     pub motion: MotionTokens,
+    /// Semantic tuning for glass surfaces; see [`crate::glass`].
+    #[serde(skip)]
+    pub glass: GlassTokens,
     /// Application-wide caret blink behavior.
     #[serde(skip)]
     pub cursor_blink: gpui_base::input::CursorBlink,
+    /// The application's font choices, applied over every theme by
+    /// [`Theme::apply_config`]. Set them with [`Theme::set_font_overrides`],
+    /// which also applies them now.
+    #[serde(skip)]
+    pub font_overrides: FontOverrides,
 }
 
 impl Default for Theme {
@@ -357,6 +376,28 @@ impl Theme {
         }
     }
 
+    /// Set the application's font choices, applied over this and every later
+    /// theme by [`Theme::apply_config`], until they are set again.
+    ///
+    /// A field the overrides leave unset goes back to what the active theme
+    /// says, or the default. Call it inside [`Theme::update`], which resolves
+    /// the families and refreshes the windows:
+    ///
+    /// ```ignore
+    /// Theme::update(cx, |theme| {
+    ///     theme.set_font_overrides(FontOverrides::new().with_font_family("Inter"))
+    /// });
+    /// ```
+    pub fn set_font_overrides(&mut self, overrides: FontOverrides) {
+        self.font_overrides = overrides;
+        let config = if self.mode.is_dark() {
+            self.dark_theme.clone()
+        } else {
+            self.light_theme.clone()
+        };
+        self.apply_fonts(&config);
+    }
+
     /// Sync the theme with the system appearance
     pub fn sync_system_appearance(window: Option<&mut Window>, cx: &mut App) {
         // Better use window.appearance() for avoid error on Linux.
@@ -496,13 +537,37 @@ impl Theme {
         }
     }
 
-    /// Get the editor background color, if not set, use the input background color.
+    /// The surface of a code editor.
+    ///
+    /// This is the highlight theme's `editor.background`, or
+    /// [`Theme::input_background`] when the theme sets none. An application that
+    /// draws code of its own can fill it with this color to match the editor.
     #[inline]
-    pub(crate) fn editor_background(&self) -> Hsla {
+    pub fn editor_background(&self) -> Hsla {
         self.highlight_theme
             .style
             .editor_background
             .unwrap_or_else(|| self.input_background())
+    }
+
+    /// Text in a code editor: the theme's `editor.foreground`, or its
+    /// `foreground` color when that is unset.
+    #[inline]
+    pub(crate) fn editor_foreground(&self) -> Hsla {
+        self.highlight_theme
+            .style
+            .editor_foreground
+            .unwrap_or(self.foreground)
+    }
+
+    /// The line between an editor's line numbers and its text: the theme's
+    /// `editor.gutter.border`, or its `border` color when that is unset.
+    #[inline]
+    pub(crate) fn editor_gutter_border(&self) -> Hsla {
+        self.highlight_theme
+            .style
+            .editor_gutter_border
+            .unwrap_or(self.border)
     }
 
     /// Returns a snapshot of the semantic design tokens represented by this
@@ -601,6 +666,7 @@ impl Theme {
         tokens.mono = self.mono_font_family.clone();
         tokens.md.size = self.font_size;
         tokens.mono_md.size = self.mono_font_size;
+        tokens.mono_features = self.mono_font_features.clone();
         tokens
     }
 
@@ -649,6 +715,7 @@ impl Theme {
         self.mono_font_family = tokens.typography.mono.clone();
         self.font_size = tokens.typography.md.size;
         self.mono_font_size = tokens.typography.mono_md.size;
+        self.mono_font_features = tokens.typography.mono_features.clone();
         self.shadow = !tokens.shadow.sm.is_empty()
             || !tokens.shadow.md.is_empty()
             || !tokens.shadow.lg.is_empty();
@@ -768,18 +835,30 @@ mod semantic_token_tests {
     }
 }
 
+/// The base font size a theme gets when it sets none.
+pub(crate) const DEFAULT_FONT_SIZE: Pixels = px(16.);
+/// The monospace font size a theme gets when it sets none.
+pub(crate) const DEFAULT_MONO_FONT_SIZE: Pixels = px(13.);
+/// The radius of general elements when a theme sets none.
+pub(crate) const DEFAULT_RADIUS: Pixels = px(6.);
+/// The radius of large elements when a theme sets none.
+pub(crate) const DEFAULT_RADIUS_LG: Pixels = px(8.);
+/// Whether controls cast shadows when a theme does not say.
+pub(crate) const DEFAULT_SHADOW: bool = true;
+
 impl From<&ThemeColor> for Theme {
     fn from(colors: &ThemeColor) -> Self {
         Theme {
             mode: ThemeMode::default(),
             transparent: Hsla::transparent_black(),
             font_family: ".SystemUIFont".into(),
-            font_size: px(16.),
+            font_size: DEFAULT_FONT_SIZE,
             mono_font_family: mono_font::default_mono_font_family(),
-            mono_font_size: px(13.),
-            radius: px(6.),
-            radius_lg: px(8.),
-            shadow: true,
+            mono_font_size: DEFAULT_MONO_FONT_SIZE,
+            mono_font_features: FontFeatures::default(),
+            radius: DEFAULT_RADIUS,
+            radius_lg: DEFAULT_RADIUS_LG,
+            shadow: DEFAULT_SHADOW,
             focus_ring: true,
             scrollbar_mode: ScrollbarMode::default(),
             notification: NotificationSettings::default(),
@@ -791,7 +870,9 @@ impl From<&ThemeColor> for Theme {
             highlight_theme: HighlightTheme::default_light(),
             sheet: SheetSettings::default(),
             motion: MotionTokens::default(),
+            glass: GlassTokens::default(),
             cursor_blink: gpui_base::input::CursorBlink::default(),
+            font_overrides: FontOverrides::default(),
         }
     }
 }
@@ -1001,6 +1082,188 @@ mod update_tests {
             assert_eq!(theme.tokens.primary, red.into());
             assert_eq!(gpui_base::Theme::global(cx).tokens.colors.primary, red);
         });
+    }
+
+    /// Switching from a square, flat theme to one that sets neither radius
+    /// nor shadow brings the defaults back, through a mode change too, and
+    /// switching to the mode of the square theme brings its settings back.
+    #[gpui::test]
+    fn switching_themes_resets_what_the_next_theme_leaves_out(cx: &mut TestAppContext) {
+        cx.update(|cx| {
+            init(cx);
+            let config = |json| Rc::new(serde_json::from_value::<ThemeConfig>(json).unwrap());
+            let square = config(serde_json::json!({
+                "name": "Square",
+                "mode": "dark",
+                "radius": 0,
+                "radius.lg": 0,
+                "shadow": false
+            }));
+            let plain_dark = config(serde_json::json!({ "name": "Plain Dark", "mode": "dark" }));
+            let plain_light = config(serde_json::json!({ "name": "Plain", "mode": "light" }));
+            let settings = |cx: &App| {
+                let theme = Theme::global(cx);
+                (theme.radius, theme.radius_lg, theme.shadow)
+            };
+            let square_settings = (px(0.), px(0.), false);
+            let default_settings = (DEFAULT_RADIUS, DEFAULT_RADIUS_LG, DEFAULT_SHADOW);
+
+            Theme::update(cx, |theme| theme.apply_config(&square));
+            assert_eq!(settings(cx), square_settings);
+            Theme::update(cx, |theme| theme.apply_config(&plain_dark));
+            assert_eq!(settings(cx), default_settings);
+
+            Theme::update(cx, |theme| theme.apply_config(&square));
+            Theme::update(cx, |theme| theme.apply_config(&plain_light));
+            assert_eq!(settings(cx), default_settings);
+
+            // Square is still the dark theme: changing to dark loads it again.
+            Theme::change(ThemeMode::Dark, None, cx);
+            assert_eq!(settings(cx), square_settings);
+            Theme::change(ThemeMode::Light, None, cx);
+            assert_eq!(settings(cx), default_settings);
+        });
+    }
+
+    /// The application's fonts survive every way a theme gets applied: a
+    /// theme switch, a mode change, a theme that names its own fonts. A field
+    /// left unset follows the theme again.
+    #[gpui::test]
+    fn font_overrides_outlast_theme_changes(cx: &mut TestAppContext) {
+        cx.update(|cx| {
+            init(cx);
+            let config = |json| Rc::new(serde_json::from_value::<ThemeConfig>(json).unwrap());
+            let styled = config(serde_json::json!({
+                "name": "Styled Dark",
+                "mode": "dark",
+                "font.family": "Theme Sans",
+                "font.size": 14,
+                "mono_font.family": "Theme Mono",
+                "mono_font.size": 12
+            }));
+            let plain = config(serde_json::json!({ "name": "Plain", "mode": "light" }));
+            let fonts = |cx: &App| {
+                let theme = Theme::global(cx);
+                (
+                    theme.font_family.clone(),
+                    theme.font_size,
+                    theme.mono_font_family.clone(),
+                    theme.mono_font_size,
+                )
+            };
+            let chosen = (
+                SharedString::from("Work Sans"),
+                px(20.),
+                SharedString::from("JetBrains Mono"),
+                px(15.),
+            );
+
+            Theme::update(cx, |theme| {
+                theme.set_font_overrides(
+                    FontOverrides::new()
+                        .with_font_family("Work Sans")
+                        .with_font_size(px(20.))
+                        .with_mono_font_family("JetBrains Mono")
+                        .with_mono_font_size(px(15.)),
+                )
+            });
+            assert_eq!(fonts(cx), chosen);
+
+            Theme::update(cx, |theme| theme.apply_config(&styled));
+            assert_eq!(fonts(cx), chosen);
+            Theme::update(cx, |theme| theme.apply_config(&plain));
+            assert_eq!(fonts(cx), chosen);
+            Theme::change(ThemeMode::Dark, None, cx);
+            assert_eq!(fonts(cx), chosen);
+            assert_eq!(
+                gpui_base::Theme::global(cx).tokens.typography.sans,
+                chosen.0,
+                "the Base projection carries the chosen font"
+            );
+
+            // Overriding only the mono family hands the rest back to the
+            // theme, the dark one here.
+            Theme::update(cx, |theme| {
+                theme.set_font_overrides(FontOverrides::new().with_mono_font_family("Code"))
+            });
+            let (family, size, mono, mono_size) = fonts(cx);
+            assert_eq!(
+                (family.as_ref(), size, mono.as_ref(), mono_size),
+                ("Theme Sans", px(14.), "Code", px(12.))
+            );
+            assert!(!Theme::global(cx).font_overrides.is_empty());
+
+            Theme::update(cx, |theme| theme.set_font_overrides(FontOverrides::new()));
+            assert_eq!(fonts(cx).2.as_ref(), "Theme Mono");
+            assert!(Theme::global(cx).font_overrides.is_empty());
+        });
+    }
+
+    /// The code font's features outlast theme changes the way the families
+    /// do, reach the Base projection that text views read, and go back to the font's own once the overrides drop them.
+    #[gpui::test]
+    fn mono_font_features_outlast_theme_changes(cx: &mut TestAppContext) {
+        cx.update(|cx| {
+            init(cx);
+            let styled = Rc::new(
+                serde_json::from_value::<ThemeConfig>(serde_json::json!({
+                    "name": "Styled Dark",
+                    "mode": "dark",
+                    "mono_font.family": "Theme Mono"
+                }))
+                .unwrap(),
+            );
+            let no_ligatures = FontFeatures(Arc::new(vec![("calt".into(), 0), ("liga".into(), 0)]));
+            let features = |cx: &App| {
+                let base = &gpui_base::Theme::global(cx).tokens.typography.mono_features;
+                let features = Theme::global(cx).mono_font_features.clone();
+                assert_eq!(base, &features, "the Base projection follows the theme");
+                features
+            };
+
+            Theme::update(cx, |theme| {
+                theme.set_font_overrides(
+                    FontOverrides::new().with_mono_font_features(no_ligatures.clone()),
+                )
+            });
+            assert_eq!(features(cx), no_ligatures);
+            Theme::update(cx, |theme| theme.apply_config(&styled));
+            assert_eq!(features(cx), no_ligatures);
+            assert_eq!(Theme::global(cx).mono_font_family.as_ref(), "Theme Mono");
+            Theme::change(ThemeMode::Light, None, cx);
+            assert_eq!(features(cx), no_ligatures);
+
+            Theme::update(cx, |theme| theme.set_font_overrides(FontOverrides::new()));
+            assert_eq!(features(cx), FontFeatures::default());
+        });
+    }
+
+    /// Applying a theme over font overrides is one update: observers of the
+    /// theme hear about it once, where re-setting fonts from an observer
+    /// made every switch two.
+    #[gpui::test]
+    fn a_theme_switch_with_font_overrides_notifies_once(cx: &mut TestAppContext) {
+        let notified = Rc::new(std::cell::Cell::new(0));
+        let _observer = cx.update(|cx| {
+            init(cx);
+            Theme::update(cx, |theme| {
+                theme.set_font_overrides(FontOverrides::new().with_font_family("Work Sans"))
+            });
+            let notified = notified.clone();
+            cx.observe_global::<Theme>(move |_| notified.set(notified.get() + 1))
+        });
+        cx.update(|cx| {
+            let config = Rc::new(
+                serde_json::from_value::<ThemeConfig>(
+                    serde_json::json!({ "name": "Other", "mode": "dark" }),
+                )
+                .unwrap(),
+            );
+            Theme::update(cx, |theme| theme.apply_config(&config));
+        });
+        cx.run_until_parked();
+        assert_eq!(notified.get(), 1);
+        cx.update(|cx| assert_eq!(Theme::global(cx).font_family.as_ref(), "Work Sans"));
     }
 
     #[gpui::test]

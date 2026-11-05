@@ -99,7 +99,7 @@ pub enum DiffEvent {
 pub(crate) struct LayoutKey {
     rem: Pixels,
     font_size: Pixels,
-    font_family: SharedString,
+    font: gpui::Font,
     mode: DiffMode,
     line_number: bool,
     marker_lane: bool,
@@ -110,7 +110,7 @@ impl LayoutKey {
     pub(crate) fn new(
         rem: Pixels,
         font_size: Pixels,
-        font_family: SharedString,
+        font: gpui::Font,
         mode: DiffMode,
         line_number: bool,
         marker_lane: bool,
@@ -119,7 +119,7 @@ impl LayoutKey {
         Self {
             rem,
             font_size,
-            font_family,
+            font,
             mode,
             line_number,
             marker_lane,

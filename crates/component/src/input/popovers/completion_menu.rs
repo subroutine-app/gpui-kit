@@ -57,6 +57,7 @@ use crate::{
     label::Label,
     list::{List, ListDelegate, ListEvent, ListState},
     menu::MenuItemElement,
+    sizing::POPUP_ITEM_INSET,
 };
 
 struct ContextMenuDelegate {
@@ -150,7 +151,7 @@ impl RenderOnce for CompletionMenuItem {
             .px_2()
             .h(rems(26. / 16.))
             .mb_0p5()
-            .rounded(cx.theme().radius)
+            .rounded_inside(cx.theme().radius, POPUP_ITEM_INSET)
             .when(item.deprecated.unwrap_or(false), |this| this.line_through())
             .child(
                 h_flex()

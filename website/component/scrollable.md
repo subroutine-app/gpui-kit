@@ -343,9 +343,12 @@ wheel input cancels it and scrolls normally. The logical scroll position remains
 and scrollbars stay fixed. Content that fits does not bounce. It is enabled by default on iOS, Android and macOS, whose own scroll views bounce, and disabled elsewhere. Reduced motion disables displacement.
 
 Nested scroll areas follow the platform: the innermost one under the pointer
-takes the whole gesture and bounces at its own ends instead of handing the rest
-to the area around it. Text inputs, lists, tables and trees take part in the
-same rule.
+that can move takes the gesture, and keeps it to its own ends, where it bounces
+instead of handing the rest to the area around it. A gesture that starts at an
+inner area's end, after a pause of half a second or with a new touch, scrolls
+the area around it, the way browsers chain scrolling. A notched mouse wheel
+eases the area it scrolls and leaves the areas around it still. Text inputs,
+lists, tables and trees take part in the same rule.
 
 For a custom viewport, wrap it in
 `gpui_kit::base::ScrollBounce::new(id, &handle, child)`. The wrapper owns the

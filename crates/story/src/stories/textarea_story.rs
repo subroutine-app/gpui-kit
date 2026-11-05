@@ -7,7 +7,7 @@ use gpui_kit::{
 
 use crate::{ChangeStorySize, section, story_toolbar};
 use gpui_kit::component::{
-    ActiveTheme as _, Icon, IconName, Sizable, Size,
+    ActiveTheme as _, Icon, IconName, Selectable as _, Sizable, Size,
     attachment::{
         Attachment, AttachmentActions, AttachmentContent, AttachmentDescription, AttachmentGroup,
         AttachmentMedia, AttachmentTitle,
@@ -15,11 +15,31 @@ use gpui_kit::component::{
     button::{Button, ButtonVariants as _},
     h_flex,
     hover_card::HoverCard,
-    input::{InputEvent, Textarea, TextareaState},
+    input::{InputEvent, SubmitKey, Textarea, TextareaState},
     v_flex,
 };
 
 pub fn init(_: &mut App) {}
+
+/// The send keys the chat offers: a label, the chords that send, and the
+/// placeholder that names them. Cmd+Enter or Ctrl+Enter always sends too.
+const SEND_KEYS: [(&str, &[SubmitKey], &str); 3] = [
+    (
+        "Enter",
+        &[SubmitKey::Enter, SubmitKey::SecondaryEnter],
+        "Type a message, Enter to send, Shift+Enter for a new line",
+    ),
+    (
+        "Shift+Enter",
+        &[SubmitKey::ShiftEnter, SubmitKey::SecondaryEnter],
+        "Type a message, Shift+Enter to send, Enter for a new line",
+    ),
+    (
+        "Cmd/Ctrl+Enter",
+        &[SubmitKey::SecondaryEnter],
+        "Type a message, Cmd/Ctrl+Enter to send, Enter for a new line",
+    ),
+];
 
 struct ComposerAttachment {
     id: u64,
@@ -35,6 +55,7 @@ pub struct TextareaStory {
     textarea_auto_grow_no_wrap: Entity<TextareaState>,
     chat_input: Entity<TextareaState>,
     chat_messages: Vec<String>,
+    send_key: usize,
     composer: Entity<TextareaState>,
     attachments: Vec<ComposerAttachment>,
     /// Counter for attachment ids; `Image::id` is a content hash, so pasting
@@ -132,8 +153,9 @@ impl TextareaStory {
         let chat_input = cx.new(|cx| {
             TextareaState::new(window, cx)
                 .auto_grow(1, 5)
-                .submit_on_enter(true)
-                .placeholder("Type a message, Enter to send, Shift+Enter for newline")
+                .smooth_caret(true)
+                .submit_keys(SEND_KEYS[0].1.iter().copied())
+                .placeholder(SEND_KEYS[0].2)
         });
 
         let composer = cx.new(|cx| {
@@ -146,7 +168,9 @@ impl TextareaStory {
             &chat_input,
             window,
             |this: &mut Self, input, event, window, cx| match event {
-                InputEvent::PressEnter { shift, .. } if !shift => {
+                InputEvent::PressEnter { secondary, shift }
+                    if input.read(cx).is_submit_chord(*secondary, *shift) =>
+                {
                     let text = input.read(cx).value().trim().to_string();
                     if !text.is_empty() {
                         this.chat_messages.push(text);
@@ -168,12 +192,23 @@ impl TextareaStory {
             textarea_auto_grow_no_wrap,
             chat_input,
             chat_messages: Vec::new(),
+            send_key: 0,
             composer,
             attachments: Vec::new(),
             next_attachment_id: 0,
             size: Size::Medium,
             _subscriptions,
         }
+    }
+
+    fn set_send_key(&mut self, ix: usize, window: &mut Window, cx: &mut Context<Self>) {
+        let (_, keys, placeholder) = SEND_KEYS[ix];
+        self.send_key = ix;
+        self.chat_input.update(cx, |state, cx| {
+            state.set_submit_keys(keys.iter().copied(), cx);
+            state.set_placeholder(placeholder, window, cx);
+        });
+        cx.notify();
     }
 
     fn on_insert_text_to_textarea(
@@ -268,10 +303,25 @@ impl Render for TextareaStory {
                     .child(Textarea::new(&self.textarea_auto_grow_no_wrap).with_size(self.size)),
             )
             .child(
-                section("Submit on Enter (Chat)").w(px(560.)).child(
+                section("Send Key (Chat)")
+                    .description("The chat input glides its caret with smooth_caret(true).")
+                    .w(px(560.))
+                    .child(
                     v_flex()
                         .gap_2()
                         .w_full()
+                        .child(h_flex().gap_2().children(SEND_KEYS.iter().enumerate().map(
+                            |(ix, (label, _, _))| {
+                                Button::new(("send-key", ix))
+                                    .outline()
+                                    .xsmall()
+                                    .label(*label)
+                                    .selected(self.send_key == ix)
+                                    .on_click(cx.listener(move |this, _, window, cx| {
+                                        this.set_send_key(ix, window, cx)
+                                    }))
+                            },
+                        )))
                         .child(v_flex().gap_1().children(
                             self.chat_messages.iter().enumerate().map(|(i, msg)| {
                                 div()

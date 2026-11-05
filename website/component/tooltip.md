@@ -9,12 +9,12 @@ A versatile tooltip component that displays helpful information when hovering ov
 
 ## Mobile behavior
 
-On iOS and Android, tooltips managed by the GPUI Base overlay are disabled. Shared components may keep their tooltip configuration, but mobile actions still need visible or accessible labels. Direct GPUI `.tooltip()` calls, including the basic `div()` example below, bypass this overlay and are not disabled by this policy. See [Mobile](../docs/mobile.md) for integration guidance.
+On iOS and Android, Kit-managed tooltips are disabled. Keep visible or accessible labels for mobile actions. GPUI's own `.tooltip()` bypasses this policy. Use `.managed_tooltip()` on custom elements to follow it. See [Mobile](../docs/mobile.md).
 
 ## Import
 
 ```rust
-use gpui_kit::component::tooltip::Tooltip;
+use gpui_kit::component::tooltip::{ManagedTooltipExt as _, Tooltip};
 ```
 
 ## Usage
@@ -26,7 +26,7 @@ use gpui_kit::component::tooltip::Tooltip;
 div()
     .child("Hover me")
     .id("basic-tooltip")
-    .tooltip(|window, cx| {
+    .managed_tooltip(|window, cx| {
         Tooltip::new("This is a helpful tooltip").build(window, cx)
     })
 ```
@@ -59,7 +59,7 @@ Button::new("save-btn")
 div()
     .child("Hover for rich content")
     .id("rich-tooltip")
-    .tooltip(|window, cx| {
+    .managed_tooltip(|window, cx| {
         Tooltip::element(|_, cx| {
             h_flex()
                 .gap_x_1()
@@ -86,7 +86,7 @@ div()
 div()
     .child("Custom keybinding")
     .id("custom-kb")
-    .tooltip(|window, cx| {
+    .managed_tooltip(|window, cx| {
         Tooltip::new("Delete item")
             .key_binding(Some(Kbd::new("Delete")))
             .build(window, cx)
@@ -176,7 +176,7 @@ v_flex()
 
 ## Timing
 
-Component tooltips, such as those set with `Button::tooltip`, open after the pointer rests on the trigger for 500 ms. After the pointer leaves, the tooltip stays for a 300 ms grace period; entering another trigger within that period switches to its tooltip immediately, without waiting again.
+Component tooltips, such as those set with `Button::tooltip`, open after the pointer rests on the trigger for 500 ms. After the pointer leaves, the tooltip stays for a 300 ms grace period.
 
 Install `TooltipDefaults` once to change these values for the whole application. Windows that are already open pick up the new values on the next hover.
 
@@ -187,6 +187,7 @@ use gpui_kit::component::tooltip::TooltipDefaults;
 gpui_kit::init(cx);
 TooltipDefaults::new()
     .with_show_delay(Duration::from_millis(300))
+    .with_switch_delay(Duration::from_millis(50))
     .with_grace_period(Duration::from_millis(200))
     .install(cx);
 ```
@@ -200,9 +201,41 @@ Button::new("help")
     .tooltip_show_delay(Duration::ZERO)
 ```
 
-The grace period is shared by all triggers in a window and has no per-trigger override. Direct GPUI `.tooltip()` calls bypass these settings; use GPUI's `.tooltip_show_delay()` on those elements instead.
+The switch delay and grace period are shared by all triggers in a window and have no per-trigger override, though a trigger's switch delay never exceeds its show delay. Direct GPUI `.tooltip()` calls bypass these settings; use GPUI's `.tooltip_show_delay()` on those elements instead.
+
+### Moving Between Tooltips
+
+While a tooltip is up, and during the grace period after the pointer leaves every element with one, another element's tooltip replaces it once the pointer has rested there for the 100 ms switch delay. Sweeping the pointer across a row of buttons leaves the open tooltip as it is instead of flashing each button's. Set the switch delay to `Duration::ZERO` to switch as soon as the pointer enters the next button.
+
+Between two tooltips built with `Tooltip` on the same row, the box moves and resizes from one to the other and uncovers the new text, which stays where it is. With reduced motion the box doesn't move and the new tooltip replaces the old one at once.
+
+### When the Trigger Goes Away
+
+A managed tooltip belongs to the element it describes. When that element is no longer drawn, the tooltip disappears in the same frame, and one still waiting for its show delay never appears. For example:
+
+- A Close button whose click closes its page.
+- A shortcut that removes a row while the pointer rests on its action button.
+- A list that re-renders and drops a row under the pointer.
+
+A trigger in a view GPUI reuses from the last frame counts as drawn while the pointer rests on it. After the pointer leaves, the tooltip stays for its grace period, or until the next button's replaces it, whatever else redraws the window. Nothing needs to be set up for this.
+
+### While a Menu Is Open
+
+While a `dropdown_menu`, a `Popover`, a `HoverCard` or a `context_menu` is open, its trigger and every element inside the trigger show no tooltip, so none covers the menu. A tooltip already up hides as the menu opens, and the pointer leaving the trigger and coming back shows nothing until the menu closes. After that, tooltips show on hover as usual. Tooltips inside the menu or popover itself still show. A `ContextMenuLayer` hides the tooltip that is up when it opens a menu.
 
 ## API Reference
+
+### ManagedTooltipExt
+
+Import `ManagedTooltipExt` for custom elements such as tree headings. Give a `div` an id before adding a managed tooltip. It then follows the same timing, lifetime and open-menu rules as a Button's tooltip.
+
+| Method | Description |
+| --- | --- |
+| `managed_tooltip(builder)` | Show a tooltip with automatic placement |
+| `managed_tooltip_at(placement, builder)` | Prefer a placement that fits the window |
+| `managed_tooltip_with(placement, show_delay, builder)` | Accept an optional placement and show delay |
+
+The builder returns an `AnyView`, usually from `Tooltip::build`.
 
 ### Tooltip
 

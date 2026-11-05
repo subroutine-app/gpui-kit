@@ -233,6 +233,31 @@ Input::new(&input).context_menu(|menu, window, cx| {
 })
 ```
 
+On macOS and Windows the menu is the operating system's. `context_menu_style(ContextMenuStyle::Drawn)`
+on `Input`, `Textarea` or `Editor` shows GPUI's menu in the theme's colors instead, as on Linux.
+
+To use one style for every text field in the application, set it once at
+startup. It also reaches the fields that other components build for
+themselves, such as the search field of Settings or of a searchable Select,
+and the menu of selectable text.
+
+```rust
+use gpui_kit::component::input::ContextMenuStyle;
+
+gpui_kit::init(cx);
+ContextMenuStyle::set_app_default(ContextMenuStyle::Drawn, cx);
+```
+
+A field's own `context_menu_style` still wins. A menu reads the default as it
+opens, so changing it later reaches every field.
+
+A right-click on the selection, or just past its end, keeps it, so the menu's
+Copy, Cut and Paste act on it. A right-click elsewhere moves the caret there
+first. Shift-F10 and the Menu key open the same menu at the caret, keeping the
+selection; they go on to the elements around a disabled input or one whose
+context menu is off. Bind other keys to `input::ShowContextMenu` to open it
+from them too.
+
 ### Touch Selection
 
 On a touch screen, a long press selects the word under the finger and keeps
@@ -289,6 +314,54 @@ Known limit: on web `read_from_clipboard()` is `None` (text arrives through
 the platform input handler); image paste there needs async clipboard access
 and permission, and is out of scope.
 
+A paste the platform delivers itself, such as a browser's paste event, is
+inserted the way the `Paste` action inserts one: one undo step, without line
+breaks in a single-line input, and one line per caret when a multi-line input
+has as many carets as the clipboard has lines.
+
+### Focus
+
+A focused input, textarea, number input, OTP cell, input group or time field
+tints its one-pixel border with the theme's `ring` color. Nothing is drawn
+outside the border, so a field inside a scroll area or a clipped container
+shows its focus whole. Buttons and other controls keep their focus rings.
+`.focus_ring(false)`, from `FocusableExt`, keeps the border as it is.
+
+### Smooth Caret
+
+With the smooth caret, the caret glides along its row to where it moves
+instead of jumping there. A typed character is drawn only as the caret passes
+it, and Backspace glides back over the deleted one. The arrow keys and the
+word motions glide too; any other movement, and any move to another row, is
+instant. It is off by default.
+
+```rust
+use std::time::Duration;
+use gpui_kit::component::input::{InputState, SmoothCaretOptions, set_app_smooth_caret};
+
+// Every input, textarea and editor that doesn't choose for itself, the ones
+// inside other components too, such as a searchable Select's filter.
+set_app_smooth_caret(true, cx);
+
+// One field's own choice wins over the application's.
+let input = cx.new(|cx| {
+    InputState::new(window, cx)
+        .smooth_caret(true)
+        .smooth_caret_options(
+            SmoothCaretOptions::default().typing_duration(Duration::from_millis(80)),
+        )
+});
+```
+
+Fields already on screen follow `set_app_smooth_caret` at once, so a setting
+can call it whenever it changes. Only drawing is animated: the value, the
+selection and the undo history change at once. A keystroke settles in 100 ms
+by default. While the system asks for reduced motion the caret moves at once,
+as it does in password fields, around right-to-left text, with several carets
+or a selection, and while an inline completion is shown. In right- and
+center-aligned inputs typing moves the text before the caret too, so typed
+characters appear at once while the arrow keys still glide.
+
 ### Cursor Blinking
 
 A focused input blinks its cursor every 500 ms. Set `Theme::cursor_blink` to
@@ -310,7 +383,8 @@ Theme::update(cx, |theme| theme.cursor_blink = CursorBlink::steady());
 
 `Theme::update` projects the policy onto Base, so it survives theme and mode
 changes. See [Base Input](../base/primitives/input.md#cursor-blinking) for the
-timing rules.
+timing rules. A caret in an inactive window neither shows nor blinks; it
+resumes when its window becomes active again.
 
 ## Examples
 

@@ -45,6 +45,19 @@ TitleBar::new()
     )
 ```
 
+### 居中标题与后缀
+
+`center` 会把内容放在标题栏中间，并以整个窗口的宽度居中，就像窗口标题那样，不受窗口按钮和两侧内容宽度的影响。
+某一侧空间不足时，居中内容会向另一侧让开；标题栏整体放不下时，它会变窄并被裁剪，因此请为它设置 `min_w_0()`，并为其中的文本设置 `truncate()`。
+设置 center 后，子元素位于它之前，`suffix` 位于它之后、窗口按钮之前。它们周围的空白区域仍可拖动窗口。
+
+```rust
+TitleBar::new()
+    .child(AppMenuBar::new(cx))
+    .center(div().min_w_0().truncate().text_sm().child("Untitled.md"))
+    .suffix(Button::new("sidebar").icon(IconName::PanelLeft).ghost())
+```
+
 ### 带菜单栏
 
 ```rust
@@ -65,6 +78,12 @@ TitleBar::new()
             .child(Button::new("notifications").icon(IconName::Bell))
     )
 ```
+
+在 Windows 和 Linux 上，可以像 Windows 用户习惯的那样用键盘操作菜单栏：按 F10 或单独轻按 Alt 会聚焦第一个菜单标题，左右方向键在标题间移动，下方向键、Enter 或空格打开当前菜单，Esc 则把焦点还给原来的位置。
+按住 Alt 再按菜单名中带下划线的字母可直接打开该菜单；单独按住 Alt 或菜单栏获得键盘焦点时，会显示这些下划线。
+即使窗口中没有任何焦点，这些按键同样有效；它们在焦点元素自身的快捷键之后处理，并且不会穿过已打开的对话框或 Sheet。
+与指针同时使用的 Alt（Alt+点击、Alt+拖动、Alt+滚轮），以及跨越窗口焦点变化而按住的 Alt，都不算轻按。
+这些按键对应 `FocusAppMenuBar` 和 `AltTap` 两个 Action，分别绑定到 `f10` 和 `alt`，应用可以重新绑定。
 
 ### Linux 自定义关闭行为
 
@@ -120,25 +139,29 @@ WindowOptions {
 
 ## 平台差异
 
+标题栏使用主题的 `title_bar` 颜色绘制；除非主题为它指定渐变，否则为单一纯色。
+每个窗口按钮都是名为 Minimize、Maximize、Restore 或 Close 的按钮，便于辅助技术识别。
+
 ### macOS
 
 - 使用原生红黄绿窗口按钮
 - traffic light 默认位置为 `(9px, 9px)`
 - 双击标题栏会调用 `window.titlebar_double_click()`
-- 左侧默认预留 `80px`
+- 左侧默认预留 `80px`；全屏时红黄绿按钮被隐藏，留白缩小为 `12px`
 - 默认表现为透明标题栏
 
 ### Windows
 
-- 使用自定义窗口控制按钮并接入系统窗口管理
-- 通过 `WindowControlArea` 处理交互
-- 支持 hover 和 active 状态
-- 每个控制按钮宽度固定为 `34px`
+- 使用 Windows 11 样式的标题按钮，宽 `46px`，以 Segoe Fluent Icons 字形绘制（Windows 10 上使用 Segoe MDL2 Assets，两者都未安装时使用图标）
+- 由 Windows 通过 `WindowControlArea` 处理，因此支持贴靠布局
+- 悬停时显示浅色填充，关闭按钮悬停时为系统红色背景配白色字形
+- 窗口未激活时字形变淡；窗口不可最小化时禁用最小化按钮，不可调整大小时禁用最大化按钮
 - 左侧默认内边距为 `12px`
 
 ### Linux
 
-- 使用手动事件处理的自定义窗口控制按钮
+- 在客户端装饰下，按桌面的按钮布局（GNOME 的 `button-layout`）决定窗口按钮所在的一侧和顺序，只绘制合成器支持的按钮，并在布局变化时重绘
+- 可通过 `button_layout()` 由应用自行指定按钮布局
 - 支持通过 `on_close_window()` 覆盖关闭逻辑
 - 支持双击最大化 / 还原
 - 支持右键弹出窗口菜单
@@ -152,6 +175,9 @@ WindowOptions {
 | --- | --- |
 | `new()` | 创建标题栏 |
 | `child(element)` | 向标题栏中添加子元素 |
+| `center(element)` | 以窗口宽度居中显示的内容 |
+| `suffix(element)` | 位于窗口按钮之前的内容 |
+| `button_layout(layout)` | 指定 Linux 窗口按钮的布局 |
 | `on_close_window(fn)` | 自定义关闭行为，仅 Linux 有效 |
 | `title_bar_options()` | 获取窗口可用的默认标题栏配置 |
 | `window_options()` | 获取标题栏配套的默认窗口配置 |
@@ -170,7 +196,6 @@ WindowOptions {
 | 常量 | 值 | 说明 |
 | --- | --- | --- |
 | `TITLE_BAR_HEIGHT` | `34px` | 标准标题栏高度 |
-| `TITLE_BAR_LEFT_PADDING` | `80px`（macOS），`12px`（其他） | 内容区域左侧留白 |
 
 ## 说明
 

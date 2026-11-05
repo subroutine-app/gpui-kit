@@ -111,13 +111,14 @@ easing yourself, or to reveal each chunk word by word; see
 
 An application that searches a document, or points at a citation inside it,
 paints its ranges with `set_range_highlights`. The application owns the
-search: it finds its ranges in `rendered_text()`, the text the view shows, and
-hands them back with the colors to paint them in, a stronger one for the
-current result:
+search. It finds its ranges in `rendered_text()`, the text the view shows, and
+hands them back with the colors to paint them in. The current result gets a
+stronger background and a text color that reads on it, here the theme's text
+or page color, whichever contrasts more:
 
 ```rust
 use gpui_kit::component::{
-    ActiveTheme as _,
+    ActiveTheme as _, contrast_ratio,
     text::{RangeHighlight, RangeHighlightError, TextViewState},
 };
 
@@ -127,7 +128,15 @@ fn highlight_matches(
     current_match: usize,
     cx: &mut Context<TextViewState>,
 ) -> Result<(), RangeHighlightError> {
-    let (color, current_color) = (cx.theme().warning.opacity(0.3), cx.theme().warning);
+    let theme = cx.theme();
+    let (color, current_color) = (theme.warning.opacity(0.3), theme.warning);
+    let current_text = if contrast_ratio(theme.foreground, current_color)
+        >= contrast_ratio(theme.background, current_color)
+    {
+        theme.foreground
+    } else {
+        theme.background
+    };
     let text = state.rendered_text();
     let matches = if query.is_empty() {
         Vec::new()
@@ -135,23 +144,32 @@ fn highlight_matches(
         text.as_str().match_indices(query).collect()
     };
     let highlights = matches.into_iter().enumerate().map(|(ix, (start, found))| {
-        RangeHighlight::new(
-            start..start + found.len(),
-            if ix == current_match { current_color } else { color },
-        )
+        let range = start..start + found.len();
+        if ix == current_match {
+            RangeHighlight::new(range, current_color).with_text_color(current_text)
+        } else {
+            RangeHighlight::new(range, color)
+        }
     });
     state.set_range_highlights(highlights, cx)
 }
 ```
 
-`rendered_text()` is the text plain copy produces: `hello **world**` reads
-`hello world`, escapes are resolved, and heading and list markers are left
-out. Offsets are UTF-8 byte offsets, so the ranges `str` search returns can be
+`rendered_text()` is the text plain copy produces. `hello **world**` reads
+`hello world`, escapes are resolved, heading and list markers are left out,
+and top-level blocks are a blank line apart, so copied paragraphs stay apart
+where they are pasted. Lists, table rows and the lines of a code block keep
+single line breaks inside their block. Offsets are UTF-8 byte offsets, so the ranges `str` search returns can be
 passed as they are, and a repeated phrase is addressed by where it occurs. The
 text is built the first time it is read.
 
 A highlight is painted behind the text and under the selection, so wrapping,
-alignment, syntax colors, links, selection and copy stay as they were. Where
+alignment, syntax colors, links, selection and copy stay as they were. One
+made `with_text_color` also paints the glyphs in its range in that color, in
+place of their syntax and link colors, so they stay readable on a strong
+background. Underlines, strikethroughs and the text's own backgrounds keep
+their colors, and the text keeps its layout, so the color can move from match
+to match without laying the text out again. Where
 highlights overlap, the later one paints over the earlier. A range that
 crosses from one block into the next paints in both. Text that belongs to no
 block is left unpainted: the line breaks between blocks, the spaces between
@@ -283,6 +301,43 @@ The handles and the menu are drawn by [`Root`](./root.md) for the whole
 window selection, so they cover a selection that spans several views. A tap
 elsewhere clears them, and the menu steps aside while the content scrolls
 under a finger.
+
+## Context menu
+
+A right-click on a selectable `TextView` or `SelectableText`, or Shift-F10 and
+the Menu key in a focused text view, opens a menu with Copy and Select All.
+The right-click keeps the selection wherever it lands, so Copy copies what
+Cmd-C or Ctrl-C copies: the whole selection, across views, with a blank line
+between paragraphs, even while a text field has focus. Copy is disabled when
+nothing is selected, and Select All selects the text view the menu opened on.
+A plain `SelectableText` offers Copy alone.
+
+The menu is a [`NativeMenu`](./menu.md), the operating system's on macOS and
+Windows, or GPUI's drawn menu after
+`ContextMenuStyle::set_app_default(ContextMenuStyle::Drawn, cx)` (see
+[Input](./input.md#context-menu)). Pressing an item of the drawn menu keeps the
+selection, as pressing an operating system menu does. A text field and a link with an `on_link_click` handler keep their
+right-click, as does any control that calls
+`GlobalState::suppress_text_selection` on its right mouse down. Replace the items with
+`TextSelectionMenu::set_builder`, which receives an empty menu and a
+`TextSelectionMenuTarget` that knows the selected text and adds the standard
+items:
+
+```rust
+use gpui_kit::component::text::TextSelectionMenu;
+
+TextSelectionMenu::set_builder(
+    |menu, target, _, _| {
+        target
+            .standard_items(menu)
+            .separator()
+            .menu_with_disabled("Search the Web", !target.has_selection(), Box::new(Search))
+    },
+    cx,
+);
+```
+
+An empty menu shows nothing. Setting a builder again replaces it.
 
 ## Link Click Handling
 

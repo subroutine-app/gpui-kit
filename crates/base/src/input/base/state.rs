@@ -34,6 +34,7 @@ use super::{
     kind::InputModeKind,
     mask_pattern::normalize_number_input,
     mode::LayoutMode,
+    smooth_caret::{AppSmoothCaret, CaretMotion, SmoothCaret},
     undo_manager::{EditIntent, UndoManager},
 };
 use crate::actions::{SelectDown, SelectLeft, SelectRight, SelectUp};
@@ -125,8 +126,75 @@ actions!(
         Search,
         Replace,
         GoToDefinition,
+        /// Open the context menu at the caret, as a right-click there would.
+        /// Bound to Shift-F10 and the Menu key.
+        ShowContextMenu,
     ]
 );
+
+/// An Enter chord that submits a multi-line text input, such as a chat
+/// composer's send key. [`InputBaseState::submit_keys`] sets the chords that
+/// submit, one or more.
+///
+/// A submitting chord inserts nothing: the [`Enter`] action propagates to
+/// the elements around the input, and the input emits
+/// [`InputEvent::PressEnter`], which [`InputBaseState::is_submit_chord`] and
+/// [`SubmitKey::matches`] recognize. The other Enter chords insert a line
+/// break. Without submit keys every chord inserts one.
+///
+/// Saved settings name it in snake case: `"enter"`, `"secondary_enter"`,
+/// `"shift_enter"`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, serde::Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SubmitKey {
+    /// Enter.
+    Enter,
+    /// Cmd+Enter on macOS and Ctrl+Enter elsewhere.
+    SecondaryEnter,
+    /// Shift+Enter.
+    ShiftEnter,
+}
+
+impl SubmitKey {
+    /// The chord an [`Enter`] action, or an [`InputEvent::PressEnter`], came
+    /// from: Cmd+Enter or Ctrl+Enter when `secondary`, Shift+Enter when
+    /// `shift`, and Enter otherwise.
+    pub fn of_enter(secondary: bool, shift: bool) -> Self {
+        if secondary {
+            Self::SecondaryEnter
+        } else if shift {
+            Self::ShiftEnter
+        } else {
+            Self::Enter
+        }
+    }
+
+    /// Whether the Enter chord described by `secondary` and `shift`, as an
+    /// [`InputEvent::PressEnter`] carries them, is this one.
+    pub fn matches(self, secondary: bool, shift: bool) -> bool {
+        Self::of_enter(secondary, shift) == self
+    }
+}
+
+/// The submit keys `keys` name, each once, in their order.
+fn submit_key_set(keys: impl IntoIterator<Item = SubmitKey>) -> Vec<SubmitKey> {
+    keys.into_iter().fold(Vec::new(), |mut set, key| {
+        if !set.contains(&key) {
+            set.push(key);
+        }
+        set
+    })
+}
+
+/// What the older `submit_on_enter` switch submits with: Enter, and Cmd+Enter
+/// or Ctrl+Enter.
+fn submit_on_enter_keys(submit: bool) -> Vec<SubmitKey> {
+    if submit {
+        vec![SubmitKey::Enter, SubmitKey::SecondaryEnter]
+    } else {
+        Vec::new()
+    }
+}
 
 /// An event emitted by an input.
 ///
@@ -209,6 +277,8 @@ pub(crate) fn init(cx: &mut App) {
             Some(CONTEXT),
         ),
         KeyBinding::new("escape", Escape, Some(CONTEXT)),
+        KeyBinding::new("shift-f10", ShowContextMenu, Some(CONTEXT)),
+        KeyBinding::new("menu", ShowContextMenu, Some(CONTEXT)),
         KeyBinding::new("up", MoveUp, Some(CONTEXT)),
         KeyBinding::new("down", MoveDown, Some(CONTEXT)),
         KeyBinding::new("left", MoveLeft, Some(CONTEXT)),
@@ -473,6 +543,8 @@ pub struct InputBaseState<M: InputModeKind> {
     pub(super) scroll_beyond_last_line: Option<usize>,
     pub(super) cursor_surrounding_lines: Option<usize>,
     pub(super) blink_cursor: Entity<BlinkCursor>,
+    /// The smooth caret's options and the glide in progress.
+    pub(super) smooth_caret: SmoothCaret,
     pub(super) loading: bool,
     /// The cursors and selections.
     ///
@@ -512,7 +584,7 @@ pub struct InputBaseState<M: InputModeKind> {
     pub(crate) text_align: TextAlign,
     pub(super) masked: bool,
     pub(super) clean_on_escape: bool,
-    pub(super) submit_on_enter: bool,
+    pub(super) submit_keys: Vec<SubmitKey>,
     /// Overrides for [`Self::text_input_configuration`].
     pub(super) input_action: Option<TextInputAction>,
     pub(super) autocorrect: Option<bool>,
@@ -951,19 +1023,19 @@ impl<M: InputModeKind> InputBaseState<M> {
             }),
             // Observe the blink cursor to repaint the view when it changes.
             cx.observe(&blink_cursor, |_, _, cx| cx.notify()),
-            // Blink the cursor when the window is active, pause when it's not.
+            // A window can become inactive without blurring its focused input.
             cx.observe_window_activation(window, |input, window, cx| {
-                if window.is_window_active() {
-                    let focus_handle = input.focus_handle.clone();
-                    if focus_handle.is_focused(window) {
-                        input.blink_cursor.update(cx, |blink_cursor, cx| {
-                            blink_cursor.start(cx);
-                        });
-                    }
+                if window.is_window_active() && input.focus_handle.is_focused(window) {
+                    input.blink_cursor.update(cx, |cursor, cx| cursor.start(cx));
+                } else {
+                    input.blink_cursor.update(cx, |cursor, cx| cursor.stop(cx));
                 }
             }),
             cx.on_focus(&focus_handle, window, Self::on_focus),
             cx.on_blur(&focus_handle, window, Self::on_blur),
+            // Unless it chooses for itself, the input follows the application's
+            // smooth caret.
+            cx.observe_global::<AppSmoothCaret>(Self::follow_app_smooth_caret),
         ];
 
         let text_style = window.text_style();
@@ -983,6 +1055,7 @@ impl<M: InputModeKind> InputBaseState<M> {
             scroll_beyond_last_line: None,
             cursor_surrounding_lines: None,
             blink_cursor,
+            smooth_caret: SmoothCaret::new(cx),
             undo_manager,
             inline_tokens: None,
             pending_token: None,
@@ -1007,7 +1080,7 @@ impl<M: InputModeKind> InputBaseState<M> {
             text_align: TextAlign::Left,
             masked: false,
             clean_on_escape: false,
-            submit_on_enter: false,
+            submit_keys: Vec::new(),
             input_action: None,
             autocorrect: None,
             autocapitalize: None,
@@ -1465,19 +1538,103 @@ impl<M: InputModeKind> InputBaseState<M> {
         self.clean_on_escape = clean;
     }
 
-    /// Set true to treat `Enter` as a submit action in multi-line mode,
-    /// while `Shift+Enter` inserts a newline.
+    /// Submit a multi-line input with each of `keys`, which then insert
+    /// nothing, while the other Enter chords break lines. See [`SubmitKey`].
     ///
-    /// Default is `false` (both `Enter` and `Shift+Enter` insert a newline).
-    #[doc(hidden)]
-    pub fn submit_on_enter(mut self, submit: bool) -> Self {
-        self.submit_on_enter = submit;
+    /// A chat composer that sends with Enter, and with Cmd+Enter or
+    /// Ctrl+Enter as well, takes `[SubmitKey::Enter, SubmitKey::SecondaryEnter]`.
+    /// By default nothing submits: every Enter chord breaks a line. A
+    /// single-line input always hands Enter on, whatever its submit keys.
+    pub fn submit_keys(mut self, keys: impl IntoIterator<Item = SubmitKey>) -> Self {
+        self.submit_keys = submit_key_set(keys);
         self
     }
 
-    pub fn set_submit_on_enter(&mut self, submit: bool, cx: &mut Context<Self>) {
-        self.submit_on_enter = submit;
+    /// Change the chords that submit, or with none let every Enter chord
+    /// break a line. See [`Self::submit_keys`].
+    pub fn set_submit_keys(
+        &mut self,
+        keys: impl IntoIterator<Item = SubmitKey>,
+        cx: &mut Context<Self>,
+    ) {
+        self.submit_keys = submit_key_set(keys);
         cx.notify();
+    }
+
+    /// The chords that submit. See [`Self::submit_keys`].
+    pub fn current_submit_keys(&self) -> &[SubmitKey] {
+        &self.submit_keys
+    }
+
+    /// Whether the Enter chord described by `secondary` and `shift`, as an
+    /// [`InputEvent::PressEnter`] carries them, submits this input.
+    pub fn is_submit_chord(&self, secondary: bool, shift: bool) -> bool {
+        self.submit_keys
+            .contains(&SubmitKey::of_enter(secondary, shift))
+    }
+
+    /// Glide the caret to where it moves instead of jumping there, and draw a
+    /// typed character only as the caret passes it, in any input: a
+    /// single-line input, a textarea or the code editor. Off by default, or
+    /// as [`set_app_smooth_caret`] chose for every input. The input's own
+    /// choice wins over the application's.
+    ///
+    /// Typing, Backspace, the arrow keys and the word motions glide the caret
+    /// along its row, and every other movement is instant. Only drawing is
+    /// animated: the text, the undo history and everything else that reads
+    /// the text change at once. While the system asks for reduced motion the
+    /// caret moves at once. [`SmoothCaretOptions`] sets what glides and how
+    /// fast.
+    ///
+    /// [`SmoothCaretOptions`]: crate::input::SmoothCaretOptions
+    /// [`set_app_smooth_caret`]: crate::input::set_app_smooth_caret
+    pub fn smooth_caret(mut self, enabled: bool) -> Self {
+        self.smooth_caret.own = Some(enabled);
+        self.smooth_caret.turn(enabled);
+        self
+    }
+
+    /// Turn the smooth caret on or off. See [`Self::smooth_caret`].
+    pub fn set_smooth_caret(&mut self, enabled: bool, cx: &mut Context<Self>) {
+        self.smooth_caret.own = Some(enabled);
+        self.smooth_caret.turn(enabled);
+        cx.notify();
+    }
+
+    /// Whether the smooth caret is on, by the input's own choice or the
+    /// application's. See [`Self::smooth_caret`].
+    pub fn has_smooth_caret(&self) -> bool {
+        self.smooth_caret.enabled
+    }
+
+    /// Set what the smooth caret glides and how fast. It takes effect while
+    /// the smooth caret is on.
+    pub fn smooth_caret_options(mut self, options: super::SmoothCaretOptions) -> Self {
+        self.smooth_caret.options = options;
+        self
+    }
+
+    /// See [`Self::smooth_caret_options`].
+    pub fn set_smooth_caret_options(
+        &mut self,
+        options: super::SmoothCaretOptions,
+        cx: &mut Context<Self>,
+    ) {
+        self.smooth_caret.options = options;
+        cx.notify();
+    }
+
+    /// With `true`, Enter and Cmd+Enter or Ctrl+Enter submit and Shift+Enter
+    /// breaks a line, as `submit_keys([SubmitKey::Enter,
+    /// SubmitKey::SecondaryEnter])`.
+    #[doc(hidden)]
+    pub fn submit_on_enter(self, submit: bool) -> Self {
+        self.submit_keys(submit_on_enter_keys(submit))
+    }
+
+    /// See [`Self::submit_on_enter`].
+    pub fn set_submit_on_enter(&mut self, submit: bool, cx: &mut Context<Self>) {
+        self.set_submit_keys(submit_on_enter_keys(submit), cx);
     }
 
     /// Set the action a software keyboard shows on its enter key, like Search
@@ -1518,13 +1675,13 @@ impl<M: InputModeKind> InputBaseState<M> {
         // revealed password must not acquire text assistance. Keep assistance
         // opt-in for structured fields such as passwords, email and URLs.
         let autocorrect = self.autocorrect.unwrap_or(false);
-        let input_action =
-            self.input_action
-                .unwrap_or(if self.is_multi_line() && !self.submit_on_enter {
-                    TextInputAction::Enter
-                } else {
-                    TextInputAction::Done
-                });
+        let input_action = self.input_action.unwrap_or(
+            if self.is_multi_line() && !self.submit_keys.contains(&SubmitKey::Enter) {
+                TextInputAction::Enter
+            } else {
+                TextInputAction::Done
+            },
+        );
         TextInputConfiguration {
             autocorrect,
             autocapitalize: self.autocapitalize.unwrap_or(Autocapitalize::None),
@@ -1708,9 +1865,9 @@ impl<M: InputModeKind> InputBaseState<M> {
     /// Focus the input field.
     pub fn focus(&self, window: &mut Window, cx: &mut Context<Self>) {
         self.focus_handle.focus(window, cx);
-        self.blink_cursor.update(cx, |cursor, cx| {
-            cursor.start(cx);
-        });
+        if window.is_window_active() {
+            self.blink_cursor.update(cx, |cursor, cx| cursor.start(cx));
+        }
     }
 
     /// Refresh the input, so the next render re-runs syntax highlighting and
@@ -2256,13 +2413,15 @@ impl<M: InputModeKind> InputBaseState<M> {
             }
         }
 
-        self.delete_selections(
-            false,
-            EditIntent::Backspace,
-            |s, offset| s.previous_boundary(offset)..offset,
-            window,
-            cx,
-        );
+        self.caret_motion(CaretMotion::Backspace, |this| {
+            this.delete_selections(
+                false,
+                EditIntent::Backspace,
+                |s, offset| s.previous_boundary(offset)..offset,
+                window,
+                cx,
+            )
+        });
     }
 
     pub(super) fn delete(&mut self, _: &Delete, window: &mut Window, cx: &mut Context<Self>) {
@@ -2347,7 +2506,23 @@ impl<M: InputModeKind> InputBaseState<M> {
         );
     }
 
+    /// Ends an input method's composition with what it has composed, if one
+    /// is open, and returns whether it was. Platforms send Enter to the input
+    /// method first while it composes; this covers one that hands the key on
+    /// instead, so Enter neither submits nor breaks a line mid-composition.
+    fn commit_composition(&mut self, window: &mut Window, cx: &mut Context<Self>) -> bool {
+        if self.ime_marked_range.is_none() {
+            return false;
+        }
+        self.unmark_text(window, cx);
+        cx.notify();
+        true
+    }
+
     pub(super) fn enter(&mut self, action: &Enter, window: &mut Window, cx: &mut Context<Self>) {
+        if self.commit_composition(window, cx) {
+            return;
+        }
         if M::handle_context_menu_action(self, Box::new(action.clone()), window, cx) {
             return;
         }
@@ -2357,11 +2532,11 @@ impl<M: InputModeKind> InputBaseState<M> {
             M::clear_inline_completion(self, cx);
         }
 
-        // In multi-line mode with `submit_on_enter` enabled, a plain `Enter`
-        // (without Shift) is treated as submit: propagate the action and emit
-        // PressEnter without inserting a newline. `Shift+Enter` still inserts
-        // a newline.
-        let insert_newline = self.is_multi_line() && (!self.submit_on_enter || action.shift);
+        // In multi-line mode a submit key propagates the action and emits
+        // PressEnter without inserting a newline. The other Enter chords
+        // insert one.
+        let insert_newline =
+            self.is_multi_line() && !self.is_submit_chord(action.secondary, action.shift);
 
         if insert_newline {
             if !self.selections.is_single() {
@@ -2452,7 +2627,7 @@ impl<M: InputModeKind> InputBaseState<M> {
                 }
             }
         } else {
-            // Single line input or submit-on-enter: just emit the event
+            // Single line input or a submit key: just emit the event
             // (e.g.: in a dialog to confirm, or a chat textarea to send).
             self.undo_manager.break_transaction_coalescing();
             cx.propagate();
@@ -2527,7 +2702,7 @@ impl<M: InputModeKind> InputBaseState<M> {
             return;
         }
 
-        if !self.active_selection().contains(offset) {
+        if !self.active_selection().touches(offset) {
             self.move_to(offset, None, cx);
         }
 
@@ -2536,7 +2711,7 @@ impl<M: InputModeKind> InputBaseState<M> {
         }
 
         if let Some(handler) = self.context_menu_handler.clone() {
-            let capabilities = self.context_menu_capabilities();
+            let capabilities = self.context_menu_capabilities().with_opened_at(offset);
             let input = cx.weak_entity();
             // The handler runs with the input released, so a custom builder can
             // read it (cursor, selection, text) to build its items.
@@ -2565,6 +2740,26 @@ impl<M: InputModeKind> InputBaseState<M> {
                     .ok();
             });
         }
+    }
+
+    /// Shift-F10 or the Menu key: the context menu under the caret.
+    fn on_action_show_context_menu(
+        &mut self,
+        _: &ShowContextMenu,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.disabled || !self.enable_context_menu || self.context_menu_handler.is_none() {
+            cx.propagate();
+            return;
+        }
+        let offset = self.cursor();
+        let position = self
+            .range_to_bounds(&(offset..offset))
+            .map(|caret| caret.bottom_left())
+            .or_else(|| self.last_bounds.map(|bounds| bounds.origin))
+            .unwrap_or_default();
+        self.handle_right_click_menu(position, offset, window, cx);
     }
 
     pub(super) fn add_cursor_above(
@@ -2795,7 +2990,7 @@ impl<M: InputModeKind> InputBaseState<M> {
         // Show Mouse context menu
         if event.button == MouseButton::Right {
             if self.enable_context_menu {
-                if !self.active_selection().contains(offset) {
+                if !self.active_selection().touches(offset) {
                     self.move_to(offset, None, cx);
                 }
                 self.pending_context_menu = Some((event.position, offset));
@@ -3979,10 +4174,10 @@ impl<M: InputModeKind> InputBaseState<M> {
             && window.is_window_active()
     }
 
-    fn on_focus(&mut self, _: &mut Window, cx: &mut Context<Self>) {
-        self.blink_cursor.update(cx, |cursor, cx| {
-            cursor.start(cx);
-        });
+    fn on_focus(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if window.is_window_active() {
+            self.blink_cursor.update(cx, |cursor, cx| cursor.start(cx));
+        }
         cx.emit(InputEvent::Focus);
     }
 
@@ -4356,6 +4551,7 @@ impl<M: InputModeKind> InputBaseState<M> {
             let old_text = self.text.clone();
             self.mode.adjust_auto_closed_pair(range, new_text.len());
             self.text.replace(range.clone(), new_text);
+            self.smooth_caret.note_edit(range.clone(), new_text.len());
 
             M::adjust_annotations(self, range, new_text.len());
             recorded |= self.push_history(
@@ -4606,6 +4802,14 @@ impl<M: InputModeKind> EntityInputHandler for InputBaseState<M> {
         self.undo_manager.commit_transaction();
     }
 
+    /// A paste the platform delivers, such as a browser's paste event, goes
+    /// where the `Paste` action's would, rather than being typed.
+    fn paste(&mut self, item: ClipboardItem, window: &mut Window, cx: &mut Context<Self>) {
+        if self.is_editable() {
+            self.insert_clipboard(item, window, cx);
+        }
+    }
+
     /// Replace text in range.
     ///
     /// - If the new text is invalid, it will not be replaced.
@@ -4617,6 +4821,13 @@ impl<M: InputModeKind> EntityInputHandler for InputBaseState<M> {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        // Typed text glides the smooth caret: record this call as typing and
+        // apply it within the recording, where this guard no longer holds.
+        if !self.silent_replace_text && self.smooth_caret.awaits_motion() {
+            return self.caret_motion(CaretMotion::Typing, |this| {
+                this.replace_text_in_range(range_utf16, new_text, window, cx)
+            });
+        }
         let requested_intent = self.undo_manager.take_pending_intent();
         if !self.is_editable() {
             return;
@@ -4780,8 +4991,11 @@ impl<M: InputModeKind> EntityInputHandler for InputBaseState<M> {
             // Masking rewrites the whole document, so ranges recorded against
             // the old text no longer point at anything.
             M::reset_annotations(self);
+            self.smooth_caret
+                .note_edit(0..old_text.len(), self.text.len());
         } else {
             M::adjust_annotations(self, &range, new_text.len());
+            self.smooth_caret.note_edit(range.clone(), new_text.len());
         }
         if mask_changed {
             // A segment-based history entry no longer matches the masked
@@ -5245,6 +5459,7 @@ impl<M: InputModeKind> Render for InputBaseState<M> {
             .on_action(window.listener_for(&entity, InputBaseState::copy))
             .on_action(window.listener_for(&entity, InputBaseState::on_action_search))
             .on_action(window.listener_for(&entity, InputBaseState::on_action_replace))
+            .on_action(window.listener_for(&entity, InputBaseState::on_action_show_context_menu))
             .on_mouse_down(
                 MouseButton::Left,
                 window.listener_for(&entity, InputBaseState::on_mouse_down),
@@ -7238,6 +7453,36 @@ mod tests {
             })
         });
         assert_eq!(cursor.get(), Some(2));
+    }
+
+    /// A right-click from a selection's start to its end, both included, keeps
+    /// it for the menu, so one just past the end of Select All does. A
+    /// right-click elsewhere moves the caret there.
+    #[gpui::test]
+    fn a_right_click_on_the_selection_keeps_it(cx: &mut TestAppContext) {
+        use std::rc::Rc;
+        cx.update(crate::init);
+        let input_view = InputView::new(cx);
+        let mut cx = VisualTestContext::from_window(input_view.window_handle.into(), cx);
+        let input = input_view.input;
+
+        cx.update(|window, cx| {
+            input.update(cx, |state, cx| {
+                state.set_value("hello world", window, cx);
+                state.on_context_menu(Rc::new(|_, _, _, _, _| {}));
+                state.select_all(window, cx);
+                for offset in [0, 5, 11] {
+                    state.handle_right_click_menu(point(px(0.), px(0.)), offset, window, cx);
+                    assert_eq!(state.selected_range(), 0..11, "at {offset}");
+                }
+
+                state.set_selected_range(6..11, cx);
+                state.handle_right_click_menu(point(px(0.), px(0.)), 11, window, cx);
+                assert_eq!(state.selected_range(), 6..11);
+                state.handle_right_click_menu(point(px(0.), px(0.)), 2, window, cx);
+                assert_eq!(state.selected_range(), 2..2);
+            })
+        });
     }
 
     #[gpui::test]
@@ -10262,10 +10507,265 @@ mod tests {
     }
 
     #[gpui::test]
+    fn focused_input_stays_quiet_in_an_inactive_window(cx: &mut TestAppContext) {
+        use std::{cell::Cell, rc::Rc, time::Duration};
+
+        cx.update(crate::init);
+        let (_, cx) = cx.add_window_view(|_, _| gpui::EmptyView);
+        let input = cx.update(|window, cx| cx.new(|cx| crate::input::InputState::new(window, cx)));
+        cx.deactivate_window();
+        cx.update(|window, cx| {
+            assert!(!window.is_window_active());
+            input.update(cx, |state, cx| state.focus(window, cx));
+        });
+        cx.run_until_parked();
+
+        let notifications = Rc::new(Cell::new(0));
+        let count = notifications.clone();
+        let _subscription =
+            cx.update(|_, cx| cx.observe(&input, move |_, _| count.set(count.get() + 1)));
+        cx.run_until_parked();
+        for _ in 0..6 {
+            cx.executor().advance_clock(Duration::from_millis(500));
+            cx.run_until_parked();
+        }
+        assert_eq!(notifications.get(), 0);
+
+        // Activating resumes blinking for the retained focus.
+        cx.update(|window, _| window.activate_window());
+        cx.run_until_parked();
+        let active = notifications.get();
+        cx.executor().advance_clock(Duration::from_millis(500));
+        cx.run_until_parked();
+        assert!(notifications.get() > active);
+
+        // Deactivating also cancels a blink already scheduled.
+        cx.deactivate_window();
+        cx.run_until_parked();
+        let settled = notifications.get();
+        for _ in 0..6 {
+            cx.executor().advance_clock(Duration::from_millis(500));
+            cx.run_until_parked();
+        }
+        assert_eq!(notifications.get(), settled);
+    }
+
+    #[gpui::test]
+    fn caret_shows_when_the_window_activates_after_focus(cx: &mut TestAppContext) {
+        let view = InputView::<EditorMode>::new(cx);
+        let mut cx = VisualTestContext::from_window(view.window_handle.into(), cx);
+        cx.update(|window, cx| {
+            assert!(!window.is_window_active());
+            view.input.update(cx, |state, cx| state.focus(window, cx));
+        });
+        cx.update(|window, _| window.activate_window());
+        cx.run_until_parked();
+        cx.update(|window, cx| window.draw(cx).clear(cx));
+        cx.run_until_parked();
+        view.input.read_with(&cx, |state, cx| {
+            assert!(state.blink_cursor.read(cx).visible());
+        });
+    }
+
+    /// The `PressEnter` events `input` emits, as `(secondary, shift)`.
+    fn record_press_enter<M: InputModeKind>(
+        input: &Entity<InputBaseState<M>>,
+        cx: &mut VisualTestContext,
+    ) -> (Rc<std::cell::RefCell<Vec<(bool, bool)>>>, Subscription) {
+        let pressed = Rc::new(std::cell::RefCell::new(Vec::new()));
+        let subscription = cx.update(|_, cx| {
+            let pressed = pressed.clone();
+            cx.subscribe(input, move |_, event: &InputEvent, _| {
+                if let InputEvent::PressEnter { secondary, shift } = event {
+                    pressed.borrow_mut().push((*secondary, *shift));
+                }
+            })
+        });
+        (pressed, subscription)
+    }
+
+    #[gpui::test]
+    fn submit_keys_choose_the_enter_chords_that_submit(cx: &mut TestAppContext) {
+        use SubmitKey::{Enter as Plain, SecondaryEnter as Secondary, ShiftEnter as Shift};
+
+        let chords = [(false, false), (true, false), (false, true)];
+        let sets: [&[SubmitKey]; 7] = [
+            &[],
+            &[Plain],
+            &[Shift],
+            &[Secondary],
+            &[Plain, Secondary],
+            &[Shift, Secondary],
+            &[Plain, Shift, Secondary],
+        ];
+        for keys in sets {
+            let view =
+                InputView::build_textarea(cx, move |state| state.submit_keys(keys.iter().copied()));
+            let mut cx = VisualTestContext::from_window(view.window_handle.into(), cx);
+            let (pressed, _subscription) = record_press_enter(&view.input, &mut cx);
+            for (secondary, shift) in chords {
+                let submits = keys.contains(&SubmitKey::of_enter(secondary, shift));
+                cx.update(|window, cx| {
+                    view.input.update(cx, |state, cx| {
+                        assert_eq!(state.is_submit_chord(secondary, shift), submits);
+                        state.set_value("hi", window, cx);
+                        state.set_selected_range(2..2, cx);
+                        state.enter(&Enter { secondary, shift }, window, cx);
+                        let expected = if submits { "hi" } else { "hi\n" };
+                        assert_eq!(state.value(), expected, "{keys:?} {secondary} {shift}");
+                    })
+                });
+                assert_eq!(pressed.borrow_mut().pop(), Some((secondary, shift)));
+                assert!(SubmitKey::of_enter(secondary, shift).matches(secondary, shift));
+            }
+        }
+    }
+
+    #[gpui::test]
+    fn submit_on_enter_submits_with_enter_and_the_secondary_chord(cx: &mut TestAppContext) {
+        let view = InputView::build_textarea(cx, |state| state.submit_on_enter(true));
+        view.input.read_with(cx, |state, _| {
+            assert_eq!(
+                state.current_submit_keys(),
+                [SubmitKey::Enter, SubmitKey::SecondaryEnter]
+            );
+        });
+        let mut cx = VisualTestContext::from_window(view.window_handle.into(), cx);
+        cx.update(|_, cx| {
+            view.input
+                .update(cx, |state, cx| state.set_submit_on_enter(false, cx))
+        });
+        view.input.read_with(&cx, |state, _| {
+            assert!(state.current_submit_keys().is_empty());
+        });
+    }
+
+    #[test]
+    fn submit_keys_serialize_in_snake_case() {
+        let keys = [
+            SubmitKey::Enter,
+            SubmitKey::SecondaryEnter,
+            SubmitKey::ShiftEnter,
+        ];
+        let json = serde_json::to_string(&keys).unwrap();
+        assert_eq!(json, r#"["enter","secondary_enter","shift_enter"]"#);
+        assert_eq!(serde_json::from_str::<Vec<SubmitKey>>(&json).unwrap(), keys);
+    }
+
+    #[gpui::test]
+    fn enter_during_composition_only_commits_it(cx: &mut TestAppContext) {
+        let view = InputView::build_textarea(cx, |state| state.submit_keys([SubmitKey::Enter]));
+        let mut cx = VisualTestContext::from_window(view.window_handle.into(), cx);
+        let (pressed, _subscription) = record_press_enter(&view.input, &mut cx);
+        let enter = Enter {
+            secondary: false,
+            shift: false,
+        };
+        cx.update(|window, cx| {
+            view.input.update(cx, |state, cx| {
+                state.replace_and_mark_text_in_range(None, "にほん", None, window, cx);
+                state.enter(&enter, window, cx);
+                assert_eq!(state.value(), "にほん");
+                assert!(state.ime_marked_range.is_none());
+            })
+        });
+        assert!(pressed.borrow().is_empty(), "no submit mid-composition");
+
+        // The next Enter does what Enter does.
+        cx.update(|window, cx| {
+            view.input
+                .update(cx, |state, cx| state.enter(&enter, window, cx))
+        });
+        assert_eq!(pressed.borrow().as_slice(), [(false, false)]);
+    }
+
+    #[gpui::test]
+    fn a_platform_paste_is_a_paste(cx: &mut TestAppContext) {
+        let textarea = InputView::build_textarea(cx, |state| state);
+        let line = InputView::build(cx, |state| state);
+
+        let mut vcx = VisualTestContext::from_window(textarea.window_handle.into(), cx);
+        vcx.update(|window, cx| {
+            textarea.input.update(cx, |state, cx| {
+                state.replace_text_in_range(None, "a", window, cx);
+                EntityInputHandler::paste(
+                    state,
+                    ClipboardItem::new_string("one\ntwo".into()),
+                    window,
+                    cx,
+                );
+                assert_eq!(state.value(), "aone\ntwo");
+                // One atomic step, apart from the typing before it.
+                state.undo(&Undo, window, cx);
+                assert_eq!(state.value(), "a");
+            })
+        });
+
+        // A single-line input drops the line breaks, as `Paste` does.
+        let mut vcx = VisualTestContext::from_window(line.window_handle.into(), cx);
+        vcx.update(|window, cx| {
+            line.input.update(cx, |state, cx| {
+                EntityInputHandler::paste(
+                    state,
+                    ClipboardItem::new_string("one\ntwo".into()),
+                    window,
+                    cx,
+                );
+                assert_eq!(state.value(), "onetwo");
+            })
+        });
+    }
+
+    #[gpui::test]
+    fn the_context_menu_keys_open_the_menu_at_the_caret(cx: &mut TestAppContext) {
+        use std::cell::Cell;
+
+        cx.update(crate::init);
+        let view = InputView::build_textarea(cx, |state| state);
+        let mut cx = VisualTestContext::from_window(view.window_handle.into(), cx);
+        let opened = Rc::new(Cell::new(0usize));
+        cx.update(|window, cx| {
+            view.input.update(cx, |state, cx| {
+                let opened = opened.clone();
+                state.on_context_menu(Rc::new(move |_, capabilities, _, _, _| {
+                    assert_eq!(capabilities.opened_at(), Some(3));
+                    opened.set(opened.get() + 1);
+                }));
+                state.set_value("hello world", window, cx);
+                state.set_selected_range(3..3, cx);
+                state.focus(window, cx);
+            })
+        });
+        cx.update(|window, cx| window.draw(cx).clear(cx));
+
+        for keystroke in ["shift-f10", "menu"] {
+            let before = opened.get();
+            cx.simulate_keystrokes(keystroke);
+            cx.run_until_parked();
+            assert_eq!(opened.get(), before + 1, "{keystroke}");
+        }
+        // The caret stays where the menu opened.
+        view.input
+            .read_with(&cx, |state, _| assert_eq!(state.cursor(), 3));
+
+        // A disabled input opens no menu.
+        cx.update(|_, cx| {
+            view.input
+                .update(cx, |state, cx| state.set_disabled(true, cx))
+        });
+        cx.simulate_keystrokes("shift-f10");
+        cx.run_until_parked();
+        assert_eq!(opened.get(), 2);
+    }
+
+    #[gpui::test]
     fn test_consumed_keystrokes_keep_cursor_visible(cx: &mut TestAppContext) {
         let view = InputView::<EditorMode>::new(cx);
         let mut cx = VisualTestContext::from_window(view.window_handle.into(), cx);
         setup_cursors(&mut cx, &view.input, "a|b");
+        // The caret blinks only in an active window.
+        cx.update(|window, _| window.activate_window());
+        cx.run_until_parked();
         cx.update(|window, cx| {
             view.input.update(cx, |state, cx| {
                 state.focus(window, cx);
@@ -10301,6 +10801,9 @@ mod tests {
         let view = InputView::<EditorMode>::new(cx);
         let mut cx = VisualTestContext::from_window(view.window_handle.into(), cx);
         setup_cursors(&mut cx, &view.input, "abcd|efgh");
+        // The caret blinks only in an active window.
+        cx.update(|window, _| window.activate_window());
+        cx.run_until_parked();
         let position = |offset: Pixels, cx: &mut VisualTestContext| {
             view.input.read_with(cx, |state, _| {
                 let layout = state.last_layout.as_ref().unwrap();

@@ -44,9 +44,51 @@ Background tokens that opt in to gradient rendering can also use CSS-style two-s
 
 Top-level theme fields, such as `cx.theme().button_primary`, remain solid `Hsla` values for compatibility. Code that needs the full resolved token can use `cx.theme().tokens.button_primary`; its `.color` field is the solid representative color, and its `.background` field contains the configured `Background`, including gradients.
 
+## Key names
+
+A few keys also go by the names Zed themes use, such as `link.foreground` for `link` and `comment.doc` for `comment_doc`. [`.theme-schema.json`](https://github.com/longbridge/gpui-kit/blob/main/.theme-schema.json) lists every key the kit reads, with these aliases. When a theme sets both names, the kit's own name wins.
+
+## Derived colors and contrast
+
+The danger, success, warning and info buttons are their status color at 20%, 30% and 40% over the background. When a theme leaves out their text color, the kit starts from the status color and makes it darker or lighter, keeping its hue, until it reaches a 4.5:1 contrast on all three fills. A text color the theme sets is used as it is.
+
+`contrast_ratio(a, b)` returns the WCAG 2 contrast ratio of two opaque colors, from 1 to 21, so an application can choose a text color that reads on a color of the theme's:
+
+```rs
+use gpui_kit::component::{ActiveTheme as _, contrast_ratio};
+
+let theme = cx.theme();
+let text = if contrast_ratio(theme.foreground, highlight) >= contrast_ratio(theme.background, highlight) {
+    theme.foreground
+} else {
+    theme.background
+};
+```
+
+## Search matches
+
+Use `cx.theme().search_match` for a matching text range and `cx.theme().search_match_active` for the current result. They default to the theme's yellow at 25% and 55% opacity. Keep text in the foreground color so both highlights work in light and dark themes.
+
+Theme files can override them with `search.match.background` and `search.match.active.background` in `colors`. Both accept a solid color or a gradient, with full backgrounds available through the corresponding `cx.theme().tokens` fields.
+
+```json
+{
+  "colors": {
+    "search.match.background": "#eab30840",
+    "search.match.active.background": "#eab3088c"
+  }
+}
+```
+
+## Editor colors
+
+In a theme's `highlight` section, `editor.background` is the background of a code editor, a text editor and Markdown code blocks, the input background by default. Code blocks also get a 1 px outline in `border`. `Theme::editor_background()` returns the surface, so an application that draws code of its own can use it too. `editor.foreground` colors a code editor's text, and `editor.line_number` and `editor.active_line_number` color the line numbers and the caret line's number. They default to `foreground`, `muted.foreground` and the editor's text color.
+
+`editor.gutter.border` colors the line between an editor's line numbers and its text. It defaults to `border`.
+
 ## Theme Registry
 
-There have more than 20 built-in themes available in [themes](https://github.com/longbridge/gpui-kit/tree/main/themes) folder.
+There are more than 50 themes in the [themes](https://github.com/longbridge/gpui-kit/tree/main/themes) folder, every one of them passing the contrast checks of the [theme tools](https://github.com/longbridge/gpui-kit/tree/main/script/themes). With the `bundled-themes` feature, `ThemeRegistry::load_bundled_themes` registers them all from the binary.
 
 https://github.com/longbridge/gpui-kit/tree/main/themes
 
@@ -75,6 +117,71 @@ pub fn init(cx: &mut App) {
     }
 }
 ```
+
+`apply_config` replaces the whole theme. A setting the file leaves out, such as `radius`, `shadow`, a font or the `highlight` section, gets its default for the file's mode, so nothing of the theme before carries over. An application that sets its own radius on the theme applies it again after switching themes. For fonts, use [font overrides](#font-overrides).
+
+### Bundled themes and a user folder
+
+An application can embed its themes in the binary and still let users add their own. Add the embedded files with `add_bundled_themes_from_str` (or `add_bundled_themes` with themes you parsed yourself, for example on a background thread), and watch the user's folder with `watch_dir`:
+
+```rs
+const THEMES: &[&str] = &[
+    include_str!("../themes/macos-classic.json"),
+    include_str!("../themes/ayu.json"),
+];
+
+let registry = ThemeRegistry::global_mut(cx);
+for theme in THEMES {
+    registry.add_bundled_themes_from_str(theme)?;
+}
+ThemeRegistry::watch_dir(user_themes_dir, cx, |cx| { /* apply the saved theme */ })?;
+```
+
+`upsert_themes_from_str` does the same and returns the names of the themes it added; calling it again with an edited file replaces them.
+
+Bundled themes stay registered whenever the folder reloads. A theme in the folder whose name matches a bundled one, ignoring case, replaces it, so a user can adjust a bundled theme by copying its file into the folder and editing it. No theme takes the name of one of the kit's two defaults. A folder theme marked `is_default` becomes the default of its mode instead, until its file goes. A copy whose mode differs from the theme it replaces doesn't take over that theme while it is the active light or dark theme. Look a theme up with `ThemeRegistry::theme(name)`, which matches the exact name first and then ignores case. The folder is read and parsed on a background thread, and a file that fails to parse is skipped and logged. Themes added with `load_themes_from_str` stay registered, under the names no other theme takes.
+
+`ThemeRegistry::load_dir` reads a folder once, the same way, without watching it. Use it where hot reload isn't wanted, and in tests: `watch_dir`'s watcher runs on its own thread, which a `#[gpui::test]`'s deterministic executor rejects. Each `watch_dir` or `load_dir` call replaces the folder before it: an earlier watch stops, and a read of an earlier folder that ends late is dropped, so the folder asked for last is the one registered.
+
+## Font overrides
+
+A theme file may name its fonts, and one that names none resets them to the defaults. So a font the user picked in the application's settings has to survive every theme switch. Set it once as a `FontOverrides`, and `apply_config` puts it back over each theme it applies, in the same update:
+
+```rs
+use gpui_kit::component::{FontOverrides, Theme};
+
+Theme::update(cx, |theme| {
+    theme.set_font_overrides(
+        FontOverrides::new()
+            .with_font_family("Inter")
+            .with_font_size(px(16.) * zoom)
+            .with_mono_font_family("JetBrains Mono")
+            .with_mono_font_size(px(13.)),
+    )
+});
+```
+
+Each field left unset follows the theme. `font_size` is also the application's zoom, since `Root` sets the window's rem size from it. A theme switch, a light or dark change and a reload of the themes folder all keep the overrides, and observers of the theme hear about each switch once. Re-applying fonts from an observer of `Theme` would update the theme a second time on every switch.
+
+### Code font features
+
+`with_mono_font_features` sets the OpenType features of the monospace font, which the theme carries as `Theme::mono_font_features`. An application with a setting for code ligatures turns them off like this:
+
+```rs
+use std::sync::Arc;
+use gpui_kit::FontFeatures;
+
+let no_ligatures = FontFeatures(Arc::new(vec![("calt".into(), 0), ("liga".into(), 0)]));
+Theme::update(cx, |theme| {
+    theme.set_font_overrides(
+        FontOverrides::new()
+            .with_mono_font_family("JetBrains Mono")
+            .with_mono_font_features(no_ligatures),
+    )
+});
+```
+
+JetBrains Mono draws its ligatures through `calt` and some other fonts through `liga`, so the example turns off both. Themes leave font features to the application, so without the override the font uses its own defaults. Text views (inline code and code blocks), the code editor, the diff view and key caps follow it. An element of your own that uses the monospace font follows the setting with `.font_features(cx.theme().mono_font_features.clone())` beside its `.font_family(cx.theme().mono_font_family.clone())`.
 
 [ActiveTheme]: https://docs.rs/gpui-component/latest/gpui_component/theme/trait.ActiveTheme.html
 [ThemeRegistry]: https://docs.rs/gpui-component/latest/gpui_component/theme/struct.ThemeRegistry.html

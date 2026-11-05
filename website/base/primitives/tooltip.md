@@ -34,9 +34,51 @@ The authoritative module is [`components/tooltip.rs`](https://github.com/longbri
 
 Hover or focus schedules it and exit or blur dismisses it; content is descriptive.
 
-`TooltipOverlay` waits 500 ms before showing and keeps a closing tooltip for a 300 ms grace period, during which another trigger switches to its tooltip immediately. Install `TooltipDefaults` to change both for the application, and call `TooltipRequest::with_show_delay` to override the show delay for one request.
+`TooltipOverlay` waits 500 ms before showing a tooltip. While one is up, and for a 300 ms grace period after the pointer leaves, another trigger's tooltip replaces it once the pointer has rested on that trigger for 100 ms, so a pointer sweeping across a row of triggers leaves the open tooltip in place instead of flashing each one. Install `TooltipDefaults` to change the show delay, switch delay and grace period for the application, and call `TooltipRequest::with_show_delay` to override the show delay for one request; the switch delay never exceeds it.
 
 Keep controlled state on the parent render type or in a GPUI entity. Update it in callbacks and call `cx.notify()`; do not recreate persistent entities during every render.
+
+### Tying a tooltip to its trigger
+
+`TooltipOverlay` shows a `TooltipRequest`. A request made with `TooltipRequest::for_trigger` is drawn only on frames that also draw its trigger, so the tooltip disappears with the element it describes, such as a button whose click closes its page, and one still waiting for its show delay never appears. Create a `TooltipTrigger` when building the trigger element and record its bounds from the element's prepaint on every frame:
+
+```rust
+use gpui_kit::base::{ElementExt as _, TooltipOverlay, TooltipRequest, TooltipTrigger};
+
+let trigger = TooltipTrigger::new();
+div()
+    .id("save")
+    .on_prepaint({
+        let trigger = trigger.clone();
+        move |bounds, window, _| trigger.prepaint(bounds, window)
+    })
+    .on_hover(move |hovered, window, cx| {
+        if *hovered {
+            overlay.update(cx, |overlay: &mut TooltipOverlay, cx| {
+                let request = TooltipRequest::for_trigger(&trigger, |_, cx| {
+                    cx.new(|_| SaveTooltip).into()
+                });
+                overlay.request_show(request, window, cx);
+            });
+        } else {
+            overlay.update(cx, |overlay: &mut TooltipOverlay, cx| {
+                overlay.request_hide_for(&trigger, window, cx);
+            });
+        }
+    })
+```
+
+Hide it with `request_hide_for` when the pointer leaves. GPUI can report the pointer entering the next trigger before it leaves this one, and `request_hide` would then hide the next trigger's tooltip too. A trigger in a view GPUI reuses from the last frame counts as drawn while the pointer rests on it, and during the grace period after the pointer leaves, the tooltip is drawn until the grace timer ends it. Call `prepaint` inside the trigger element's own element ID, because the trigger's state is kept under it.
+
+`TooltipRequest::new` anchors a request to fixed bounds instead. The tooltip stays until it is hidden, and another request made this way replaces it at once.
+
+### Inside the trigger of an open popup
+
+`Popup` prepaints its trigger with `prepaint_popup_trigger`, so while it shows content, the tooltip triggers inside its trigger show nothing and a tooltip already up for one of them hides. An element of your own that hosts a popup does the same around its trigger's prepaint:
+
+```rust
+gpui_kit::base::prepaint_popup_trigger(self.open, || self.trigger.prepaint(window, cx));
+```
 
 ## Complete Rust example
 

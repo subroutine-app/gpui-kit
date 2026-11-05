@@ -800,6 +800,7 @@ impl Element for TextView {
                 cx.write_to_clipboard(gpui::ClipboardItem::new_string(text));
             })
             .on_action(window.listener_for(&state, TextViewState::on_action_select_all))
+            .on_action(window.listener_for(&state, TextViewState::on_action_show_context_menu))
             .map(|this| {
                 if self.scrollable {
                     this.child(crate::ScrollBounce::new(
@@ -2859,7 +2860,7 @@ mod tests {
             );
             assert_eq!(
                 selected_text.trim(),
-                "The same words with inline code.\nThe same words with inline code.\nThe same words with inline code.\nThe same words with inline code.\nHeading with inline code\nHeading with inline code\nthis is a test",
+                "The same words with inline code.\n\nThe same words with inline code.\n\nThe same words with inline code.\nThe same words with inline code.\n\nHeading with inline code\n\nHeading with inline code\n\nthis is a test",
                 "{case}: wrapped inline-code text was lost or duplicated"
             );
             let following = text_bounds.last().expect("following paragraph must paint");
@@ -3921,6 +3922,67 @@ mod tests {
         assert_eq!(selected_text.trim(), "quick select value");
     }
 
+    #[gpui::test]
+    fn a_final_table_has_no_more_trailing_gap_than_a_final_paragraph(cx: &mut TestAppContext) {
+        const TABLE: &str = "| Name | Age |\n|:--|--:|\n| Alice | 30 |";
+        const FOLLOWED: &str = "| Name | Age |\n|:--|--:|\n| Alice | 30 |\n\nAfter table.";
+
+        struct TableEndRoot {
+            view: Entity<TextViewState>,
+            scroll: bool,
+        }
+
+        impl Render for TableEndRoot {
+            fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+                let mut table = StyleRefinement::default();
+                if self.scroll {
+                    table.overflow.x = Some(Overflow::Scroll);
+                }
+                div().w(px(320.)).child(
+                    TextView::new(&self.view)
+                        .style(
+                            TextViewStyle::default()
+                                .with_table(table)
+                                .with_paragraph_gap(rems(2.)),
+                        )
+                        .table_actions(|_, _, _| {
+                            div().h(px(1.)).debug_selector(|| "table-end".into())
+                        }),
+                )
+            }
+        }
+
+        cx.update(crate::init);
+        for scroll in [false, true] {
+            for source in [TABLE, "After table.", FOLLOWED] {
+                let (root, cx) = cx.add_window_view(|_, cx| TableEndRoot {
+                    view: cx.new(|cx| TextViewState::markdown(source, cx)),
+                    scroll,
+                });
+                let cx: &mut VisualTestContext = cx;
+                cx.run_until_parked();
+                let gap = cx.update(|window, cx| {
+                    window.draw(cx).clear(cx);
+                    rems(2.).to_pixels(window.rem_size())
+                });
+                let (bounds, lines) = root.read_with(cx, |root, cx| {
+                    let state = root.view.read(cx);
+                    (state.bounds(), state.selection_adapter.text_bounds())
+                });
+                let content_bottom = if source == TABLE {
+                    cx.debug_bounds("table-end").unwrap().bottom()
+                } else {
+                    lines.last().unwrap().bottom()
+                };
+                assert_eq!(bounds.bottom(), content_bottom, "scroll {scroll}, {source}");
+                if source == FOLLOWED {
+                    let table_bottom = cx.debug_bounds("table-end").unwrap().bottom();
+                    assert_eq!(lines.last().unwrap().top() - table_bottom, gap);
+                }
+            }
+        }
+    }
+
     mod multi_click_drag {
         use super::*;
 
@@ -4018,9 +4080,9 @@ mod tests {
             assert_eq!(selected(&state, cx), "alpha beta");
             let end = position(&state, second, 8, cx);
             drag(end, cx);
-            assert_eq!(selected(&state, cx), "beta gamma\ndelta epsilon");
+            assert_eq!(selected(&state, cx), "beta gamma\n\ndelta epsilon");
             release(end, 2, cx);
-            assert_eq!(selected(&state, cx), "beta gamma\ndelta epsilon");
+            assert_eq!(selected(&state, cx), "beta gamma\n\ndelta epsilon");
         }
 
         #[gpui::test]
@@ -4030,12 +4092,12 @@ mod tests {
             press(position(&state, "second one", 2, cx), 3, false, cx);
             assert_eq!(selected(&state, cx), "second one");
             drag(position(&state, "third one", 2, cx), cx);
-            assert_eq!(selected(&state, cx), "second one\nthird one");
+            assert_eq!(selected(&state, cx), "second one\n\nthird one");
             let end = position(&state, "first one", 2, cx);
             drag(end, cx);
-            assert_eq!(selected(&state, cx), "first one\nsecond one");
+            assert_eq!(selected(&state, cx), "first one\n\nsecond one");
             release(end, 3, cx);
-            assert_eq!(selected(&state, cx), "first one\nsecond one");
+            assert_eq!(selected(&state, cx), "first one\n\nsecond one");
         }
 
         /// A hard break adds a line to a paragraph without ending that paragraph.
@@ -4054,18 +4116,18 @@ mod tests {
             assert_eq!(selected(&state, cx), "middle");
             let after = position(&state, last, 2, cx);
             drag(after, cx);
-            assert_eq!(selected(&state, cx), format!("middle\n{last}"));
+            assert_eq!(selected(&state, cx), format!("middle\n\n{last}"));
             let before = position(&state, first, "first top\n".len() + 2, cx);
             drag(before, cx);
-            assert_eq!(selected(&state, cx), format!("{first}\nmiddle"));
+            assert_eq!(selected(&state, cx), format!("{first}\n\nmiddle"));
             release(before, 3, cx);
 
             press(after, 1, true, cx);
             release(after, 1, cx);
-            assert_eq!(selected(&state, cx), format!("middle\n{last}"));
+            assert_eq!(selected(&state, cx), format!("middle\n\n{last}"));
             press(before, 1, true, cx);
             release(before, 1, cx);
-            assert_eq!(selected(&state, cx), format!("{first}\nmiddle"));
+            assert_eq!(selected(&state, cx), format!("{first}\n\nmiddle"));
         }
 
         /// Inline code lays a paragraph out in pieces; the drag snaps the same.
@@ -4075,13 +4137,13 @@ mod tests {
 
             press(position(&state, "plain words", 8, cx), 2, false, cx);
             drag(position(&state, " in here", 6, cx), cx);
-            assert_eq!(selected(&state, cx), "words\nuse code in here");
+            assert_eq!(selected(&state, cx), "words\n\nuse code in here");
             release(position(&state, " in here", 6, cx), 2, cx);
 
             press(position(&state, "plain words", 2, cx), 3, false, cx);
             assert_eq!(selected(&state, cx), "plain words");
             drag(position(&state, "use ", 1, cx), cx);
-            assert_eq!(selected(&state, cx), "plain words\nuse code in here");
+            assert_eq!(selected(&state, cx), "plain words\n\nuse code in here");
         }
 
         #[gpui::test]
@@ -4108,7 +4170,7 @@ mod tests {
         use crate::{TextSelection, text::SelectionFormat};
 
         const MARKDOWN: &str = "中文 **café**\n\nβeta `\u{2009}code\u{2009}` 👩‍💻\n\n終わり";
-        const PLAIN: &str = "中文 café\nβeta \u{2009}code\u{2009} 👩‍💻\n終わり\n";
+        const PLAIN: &str = "中文 café\n\nβeta \u{2009}code\u{2009} 👩‍💻\n\n終わり\n";
 
         struct Root {
             state: Entity<TextViewState>,
@@ -4299,7 +4361,7 @@ mod tests {
                 let state = root.read_with(cx, |root, _| root.state.clone());
                 let (start, _, end) = endpoints(&state, cx);
                 let expected = if format == SelectionFormat::Plain {
-                    "before x² after\nBLOCK\nlast\n"
+                    "before x² after\n\nBLOCK\n\nlast\n"
                 } else {
                     "before $x$ after\n\n---\n\nlast"
                 };
@@ -4338,7 +4400,8 @@ mod tests {
             // selected_text(), and the document's selection serializer.
             let expected = (0..180)
                 .map(|ix| format!("p{ix:03} café 中文 👩‍💻 \u{2009}code\u{2009}\n"))
-                .collect::<String>();
+                .collect::<Vec<_>>()
+                .join("\n");
             let (root, cx) = document(&markdown, SelectionFormat::Plain, false, cx);
             cx.simulate_resize(gpui::size(px(800.), px(12000.)));
             cx.update(|window, cx| window.draw(cx).clear(cx));
@@ -4437,7 +4500,7 @@ mod tests {
                     .collect::<Vec<_>>();
                 let markdown = format!("PREFIX `code` suffix\n\n{}", tail.join("\n\n"));
                 let expected = if format == SelectionFormat::Plain {
-                    format!("code suffix\n{}\n", tail.join("\n"))
+                    format!("code suffix\n\n{}\n", tail.join("\n\n"))
                 } else {
                     format!("`code` suffix\n\n{}", tail.join("\n\n"))
                 };

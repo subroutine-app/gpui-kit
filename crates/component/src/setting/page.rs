@@ -2,8 +2,8 @@ use std::rc::Rc;
 
 use gpui::{
     AnyElement, App, Entity, InteractiveElement as _, IntoElement, ListAlignment, ListOffset,
-    ListState, ParentElement as _, SharedString, StyleRefinement, Styled, Window, div, list,
-    prelude::FluentBuilder as _, px,
+    ListState, ParentElement as _, Pixels, SharedString, StyleRefinement, Styled, Window, div,
+    list, prelude::FluentBuilder as _, px,
 };
 use rust_i18n::t;
 
@@ -13,7 +13,11 @@ use crate::{
     h_flex,
     label::Label,
     scroll::ScrollableElement,
-    setting::{RenderOptions, SettingGroup, settings::SettingsState},
+    setting::{
+        RenderOptions, SettingGroup,
+        group_view::{GroupInputs, GroupView},
+        settings::SettingsState,
+    },
     v_flex,
 };
 
@@ -155,13 +159,14 @@ impl SettingPage {
 
     pub(super) fn render(
         &self,
-        ix: usize,
         group_indices: &[usize],
         state: &Entity<SettingsState>,
         options: &RenderOptions,
+        width: Pixels,
         window: &mut Window,
         cx: &mut App,
     ) -> impl IntoElement {
+        let ix = options.page_ix();
         let search_input = state.read(cx).search_input.clone();
         let query = search_input.read(cx).value();
         let groups = group_indices
@@ -169,6 +174,7 @@ impl SettingPage {
             .map(|&ix| (ix, self.groups[ix].clone()))
             .collect::<Vec<_>>();
         let groups_count = groups.len();
+        let settings_id = state.entity_id();
 
         let page_state = window.use_keyed_state(
             SharedString::from(format!("list-state:{}", ix)),
@@ -296,17 +302,29 @@ impl SettingPage {
                             let options = *options;
                             move |visible_ix, window, cx| {
                                 let (group_ix, group) = groups[visible_ix].clone();
+                                let options = options.with_page_ix(ix).with_group_ix(group_ix);
+                                if group.key.is_some() {
+                                    return render_keyed_group(
+                                        group,
+                                        GroupInputs {
+                                            query: query.clone(),
+                                            options,
+                                            width,
+                                            rem: window.rem_size(),
+                                        },
+                                        SharedString::from(format!(
+                                            "settings-group-{settings_id}-{ix}-{group_ix}"
+                                        )),
+                                        window,
+                                        cx,
+                                    );
+                                }
                                 // Keep horizontal padding inside the list's clip bounds
                                 // so focus rings can extend beyond the group's edges.
                                 div()
                                     .w_full()
                                     .px_4()
-                                    .child(group.py_4().render(
-                                        &query,
-                                        &options.with_page_ix(ix).with_group_ix(group_ix),
-                                        window,
-                                        cx,
-                                    ))
+                                    .child(group.py_4().render(&query, &options, window, cx))
                                     .into_any_element()
                             }
                         })
@@ -315,6 +333,20 @@ impl SettingPage {
                     .vertical_scrollbar(&list_state),
             )
     }
+}
+
+fn render_keyed_group(
+    group: SettingGroup,
+    inputs: GroupInputs,
+    state_key: SharedString,
+    window: &mut Window,
+    cx: &mut App,
+) -> AnyElement {
+    let view = window.use_keyed_state(state_key, cx, |_, _| {
+        GroupView::new(group.clone(), inputs.clone())
+    });
+    view.update(cx, |view, cx| view.update(group, inputs, cx));
+    GroupView::element(view, window, cx)
 }
 
 struct PageState {

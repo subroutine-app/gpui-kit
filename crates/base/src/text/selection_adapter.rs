@@ -273,6 +273,14 @@ impl TextViewSelectionAdapter {
             cx,
         );
 
+        let view_for_select_all = view.clone();
+        selection.select_all_with(
+            move |_, cx| {
+                let _ = view_for_select_all.update(cx, |state, cx| state.select_all(cx));
+            },
+            cx,
+        );
+
         selection.focus_with(
             move |window, cx| {
                 let Some(view) = view.upgrade() else {
@@ -305,6 +313,21 @@ impl TextViewSelectionAdapter {
     pub(super) fn clear_copy_projections(&self, cx: &App) {
         self.selection.clear_table_cell_selection(cx);
         self.frame.borrow_mut().copy_projections.clear();
+    }
+
+    /// The participant this view's text takes part in the window selection
+    /// as.
+    pub(super) fn handle(&self) -> &TextSelectionHandle {
+        &self.selection
+    }
+
+    /// Where the keyboard opens the context menu, under the end of the
+    /// selection painted last frame, if this view painted one.
+    pub(super) fn menu_position(&self) -> Option<Point<Pixels>> {
+        self.frame
+            .borrow()
+            .selection_edges
+            .map(|(_, end)| end.bottom_left())
     }
 
     /// Registers `projection` as it paints, with the table cell it is in.

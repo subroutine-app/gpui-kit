@@ -5,7 +5,7 @@ use gpui::{
 
 use crate::{
     ActiveTheme, Disableable, Icon, IconName, Selectable, Sizable, Size, StyleSized, StyledExt,
-    h_flex,
+    ThemeStyled as _, h_flex, sizing::POPUP_ITEM_INSET,
 };
 
 /// A single row element used inside searchable-list dropdowns (Select, ComboBox, MultiComboBox).
@@ -101,7 +101,7 @@ impl RenderOnce for SearchableListItemElement {
             .gap_x_1()
             .py_1()
             .px_2()
-            .rounded(cx.theme().radius)
+            .rounded_inside(cx.theme().radius, POPUP_ITEM_INSET)
             .text_base()
             .text_color(cx.theme().foreground)
             .items_center()

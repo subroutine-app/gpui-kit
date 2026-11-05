@@ -1,22 +1,26 @@
 use std::ops::Range;
 
 use crate::{
-    Icon, IconName, Sizable, Size, StyledExt,
+    ActiveTheme as _, Icon, IconName, IndexPath, Sizable, Size, StyledExt,
     empty::{Empty, EmptyDescription, EmptyHeader, EmptyMedia, EmptyMediaVariant, EmptyTitle},
     group_box::GroupBoxVariant,
     h_resizable,
     input::{Input, InputState},
     resizable_panel,
+    select::{Select, SelectEvent, SelectItem, SelectState},
     setting::SettingPage,
     sidebar::{Sidebar, SidebarMenu, SidebarMenuItem},
+    v_flex,
 };
 use gpui::{
     App, AppContext as _, Axis, ElementId, Entity, InteractiveElement as _, IntoElement,
-    ParentElement as _, Pixels, RenderOnce, StyleRefinement, Styled, Window, container_query, div,
-    prelude::FluentBuilder as _, px, relative,
+    ParentElement as _, Pixels, RenderOnce, SharedString, StyleRefinement, Styled, Subscription,
+    Window, container_query, div, prelude::FluentBuilder as _, px, relative,
 };
 use rust_i18n::t;
 
+/// Below this width the page stacks its fields under their titles, and the
+/// whole of `Settings` trades its sidebar for a page picker above the page.
 const STACKED_LAYOUT_MAX_WIDTH: Pixels = px(480.);
 
 /// The settings structure containing multiple pages for app settings.
@@ -26,11 +30,15 @@ const STACKED_LAYOUT_MAX_WIDTH: Pixels = px(480.);
 /// ```ignore
 /// Settings
 ///   SettingPage     <- The single active page displayed
-///     SettingGroup
-///       SettingItem
-///         Label
+///     SettingGroup  <- Rendered as a SettingSection
+///       SettingItem <- Rendered as a SettingRow
+///         Label, description, info
 ///         SettingField (e.g., Switch, Dropdown, Input)
 /// ```
+///
+/// [`SettingSection`](super::SettingSection) and [`SettingRow`](super::SettingRow)
+/// are also usable on their own in an application-owned layout, with
+/// [`SettingList`](super::SettingList) for search.
 #[derive(IntoElement)]
 pub struct Settings {
     id: ElementId,
@@ -115,6 +123,7 @@ impl Settings {
         state: &Entity<SettingsState>,
         filter: &SettingsFilter,
         options: &RenderOptions,
+        width: Pixels,
         window: &mut Window,
         cx: &mut App,
     ) -> gpui::AnyElement {
@@ -123,7 +132,14 @@ impl Settings {
             && !filter.groups[page_ix].is_empty()
         {
             return page
-                .render(page_ix, &filter.groups[page_ix], state, options, window, cx)
+                .render(
+                    &filter.groups[page_ix],
+                    state,
+                    &options.with_page_ix(page_ix),
+                    width,
+                    window,
+                    cx,
+                )
                 .into_any_element();
         }
 
@@ -131,24 +147,40 @@ impl Settings {
             return div()
                 .size_full()
                 .debug_selector(|| "settings-no-results".into())
-                .child(Self::render_no_results())
+                .child(render_no_results())
                 .into_any_element();
         }
 
         div().into_any_element()
     }
 
-    fn render_no_results() -> impl IntoElement {
-        Empty::new().size_full().header(
-            EmptyHeader::new()
-                .media(
-                    EmptyMedia::new()
-                        .with_variant(EmptyMediaVariant::Icon)
-                        .child(Icon::new(IconName::Search)),
+    /// The sidebar's place at narrow widths: search, then a page picker,
+    /// above the page.
+    fn render_navigation(&self, state: &Entity<SettingsState>, cx: &App) -> impl IntoElement {
+        let state = state.read(cx);
+        v_flex()
+            .w_full()
+            .flex_shrink_0()
+            .p_4()
+            .gap_2()
+            .bg(cx.theme().tokens.sidebar)
+            .text_color(cx.theme().sidebar_foreground)
+            .border_b_1()
+            .border_color(cx.theme().sidebar_border)
+            .refine_style(&self.sidebar_style)
+            .child(
+                div()
+                    .w_full()
+                    .refine_style(&self.header_style)
+                    .child(Input::new(&state.search_input).prefix(IconName::Search)),
+            )
+            .when(!state.choices.is_empty(), |this| {
+                this.child(
+                    Select::new(&state.page_select)
+                        .w_full()
+                        .accessibility_label("Settings page"),
                 )
-                .title(EmptyTitle::new().child(t!("Settings.no_results")))
-                .description(EmptyDescription::new().child(t!("Settings.no_results_description"))),
-        )
+            })
     }
 
     fn render_sidebar(
@@ -237,6 +269,19 @@ impl Sizable for Settings {
     }
 }
 
+pub(super) fn render_no_results() -> impl IntoElement {
+    Empty::new().size_full().header(
+        EmptyHeader::new()
+            .media(
+                EmptyMedia::new()
+                    .with_variant(EmptyMediaVariant::Icon)
+                    .child(Icon::new(IconName::Search)),
+            )
+            .title(EmptyTitle::new().child(t!("Settings.no_results")))
+            .description(EmptyDescription::new().child(t!("Settings.no_results_description"))),
+    )
+}
+
 /// Visible groups in each original page. Filtering never renumbers source data.
 struct SettingsFilter {
     groups: Vec<Vec<usize>>,
@@ -285,7 +330,31 @@ impl SettingsFilter {
     }
 }
 
+/// A page in the narrow layout's picker. The value is the page's original
+/// index, so a search that hides earlier pages never renumbers the choices.
+#[derive(Clone, PartialEq)]
+struct PageChoice {
+    page_ix: usize,
+    title: SharedString,
+}
+
+impl SelectItem for PageChoice {
+    type Value = usize;
+
+    fn title(&self) -> SharedString {
+        self.title.clone()
+    }
+
+    fn value(&self) -> &usize {
+        &self.page_ix
+    }
+}
+
 pub(super) struct SettingsState {
+    page_select: Entity<SelectState<Vec<PageChoice>>>,
+    /// The pages the picker offers: those matching the search.
+    choices: Vec<PageChoice>,
+    _page_selection: Subscription,
     pub(super) selected_index: SelectIndex,
     /// If set, defer scrolling to this group index after rendering.
     pub(super) deferred_scroll_group_ix: Option<usize>,
@@ -301,7 +370,7 @@ pub(super) struct SettingsState {
 /// ```ignore
 /// item.render_item(&options.with_item_ix(item_ix), window, cx)
 /// ```
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, PartialEq)]
 pub struct RenderOptions {
     page_ix: usize,
     group_ix: usize,
@@ -409,8 +478,26 @@ impl RenderOnce for Settings {
                     .placeholder(t!("Settings.search_placeholder"))
                     .default_value("")
             });
+            let page_select = cx.new(|cx| SelectState::new(Vec::new(), None, window, cx));
+            let page_selection = cx.subscribe(
+                &page_select,
+                |state: &mut SettingsState, _, event: &SelectEvent<Vec<PageChoice>>, cx| {
+                    let SelectEvent::Confirm(Some(page_ix)) = event else {
+                        return;
+                    };
+                    state.selected_index = SelectIndex {
+                        page_ix: *page_ix,
+                        group_ix: None,
+                    };
+                    state.deferred_scroll_group_ix = None;
+                    cx.notify();
+                },
+            );
 
             SettingsState {
+                page_select,
+                choices: Vec::new(),
+                _page_selection: page_selection,
                 search_input,
                 selected_index: self.default_selected_index,
                 deferred_scroll_group_ix: None,
@@ -427,34 +514,113 @@ impl RenderOnce for Settings {
                 state.deferred_scroll_group_ix = None;
             });
         }
+        self.sync_page_choices(&state, &filter, selected, window, cx);
         let options = RenderOptions::new()
             .with_size(self.size)
             .with_group_variant(self.group_variant);
-        let sidebar_size_range = self.sidebar_size_range.clone();
-        let sidebar = self
-            .render_sidebar(&state, &filter, window, cx)
-            .into_any_element();
 
-        h_resizable(self.id.clone())
-            .child(
-                resizable_panel()
-                    .size(self.sidebar_width)
-                    .size_range(sidebar_size_range)
-                    .child(sidebar),
-            )
-            .child(
-                resizable_panel().child(container_query(move |size, window, cx| {
-                    let options = options.with_layout(if size.width <= STACKED_LAYOUT_MAX_WIDTH {
-                        Axis::Vertical
-                    } else {
-                        Axis::Horizontal
-                    });
-                    self.render_active_page(&state, &filter, &options, window, cx)
-                })),
-            )
+        // The breakpoint measures the whole surface, not the page beside the
+        // sidebar, so the sidebar never squeezes a narrow window's page.
+        container_query(move |size, window, cx| {
+            if size.width < STACKED_LAYOUT_MAX_WIDTH {
+                let page = self.render_active_page(
+                    &state,
+                    &filter,
+                    &options.with_layout(Axis::Vertical),
+                    size.width,
+                    window,
+                    cx,
+                );
+                return v_flex()
+                    .size_full()
+                    .child(self.render_navigation(&state, cx))
+                    .child(div().flex_1().min_h_0().child(page))
+                    .into_any_element();
+            }
+
+            let sidebar = self
+                .render_sidebar(&state, &filter, window, cx)
+                .into_any_element();
+            h_resizable(self.id.clone())
+                .child(
+                    resizable_panel()
+                        .size(self.sidebar_width)
+                        .size_range(self.sidebar_size_range.clone())
+                        .child(sidebar),
+                )
+                .child(
+                    resizable_panel().child(container_query(move |size, window, cx| {
+                        let layout = if size.width <= STACKED_LAYOUT_MAX_WIDTH {
+                            Axis::Vertical
+                        } else {
+                            Axis::Horizontal
+                        };
+                        self.render_active_page(
+                            &state,
+                            &filter,
+                            &options.with_layout(layout),
+                            size.width,
+                            window,
+                            cx,
+                        )
+                    })),
+                )
+                .into_any_element()
+        })
+    }
+}
+
+impl Settings {
+    /// Keep the narrow layout's picker on the pages the search leaves and on
+    /// the selected page, whichever layout is showing, so a resize across the
+    /// breakpoint keeps the page.
+    fn sync_page_choices(
+        &self,
+        state: &Entity<SettingsState>,
+        filter: &SettingsFilter,
+        selected: SelectIndex,
+        window: &mut Window,
+        cx: &mut App,
+    ) {
+        let choices: Vec<_> = filter
+            .visible_pages()
+            .map(|page_ix| PageChoice {
+                page_ix,
+                title: self.pages[page_ix].title.clone(),
+            })
+            .collect();
+        let selected_row = choices
+            .iter()
+            .position(|choice| choice.page_ix == selected.page_ix);
+        state.update(cx, |state, cx| {
+            let changed = state.choices != choices;
+            let shown = state.page_select.read(cx).selected_value().copied();
+            if !changed && shown == selected_row.map(|_| selected.page_ix) {
+                return;
+            }
+            state.page_select.update(cx, |select, cx| {
+                if changed {
+                    select.set_items(choices.clone(), window, cx);
+                }
+                select.set_selected_index(
+                    selected_row.map(|row| IndexPath::default().row(row)),
+                    window,
+                    cx,
+                );
+            });
+            state.choices = choices;
+        });
     }
 }
 
 #[cfg(test)]
 #[path = "tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "cache_tests.rs"]
+mod cache_tests;
+
+#[cfg(test)]
+#[path = "row_layout_tests.rs"]
+mod row_layout_tests;

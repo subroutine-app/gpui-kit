@@ -13,6 +13,8 @@ mod editor;
 mod history;
 #[path = "input/lifecycle.rs"]
 mod lifecycle;
+#[path = "input/send_keys.rs"]
+mod send_keys;
 #[path = "input/textarea.rs"]
 mod textarea;
 use gpui_component::input::{Input, InputState};

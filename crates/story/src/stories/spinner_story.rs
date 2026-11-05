@@ -5,6 +5,7 @@ use gpui_kit::{
 };
 
 use crate::{ChangeStorySize, section, story_toolbar};
+use std::time::Duration;
 
 pub struct SpinnerStory {
     focus_handle: gpui_kit::FocusHandle,
@@ -93,6 +94,21 @@ impl Render for SpinnerStory {
                             .with_size(self.size)
                             .icon(IconName::LoaderCircle)
                             .color(cx.theme().cyan),
+                    ),
+            )
+            .child(
+                section("Frame rate and duration")
+                    .description(
+                        "A spinner draws in each frame the display shows. A cap draws less often, and a longer turn is calmer.",
+                    )
+                    .gap_x_2()
+                    .child(Spinner::new().with_size(self.size))
+                    .child(Spinner::new().with_size(self.size).max_fps(30.))
+                    .child(Spinner::new().with_size(self.size).max_fps(12.))
+                    .child(
+                        Spinner::new()
+                            .with_size(self.size)
+                            .duration(Duration::from_secs(2)),
                     ),
             )
             .child(

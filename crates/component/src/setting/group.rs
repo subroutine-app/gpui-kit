@@ -1,24 +1,26 @@
 use std::rc::Rc;
 
 use gpui::{
-    AnyElement, App, IntoElement, ParentElement as _, SharedString, StyleRefinement, Styled,
-    Window, prelude::FluentBuilder as _,
+    AnyElement, App, IntoElement, SharedString, StyleRefinement, Styled, Window,
+    prelude::FluentBuilder as _,
 };
 
 use crate::{
-    ActiveTheme, StyledExt,
-    group_box::{GroupBox, GroupBoxVariant, GroupBoxVariants},
-    label::Label,
-    setting::{RenderOptions, SettingItem},
-    v_flex,
+    StyledExt,
+    group_box::{GroupBoxVariant, GroupBoxVariants},
+    setting::{RenderOptions, SettingItem, SettingSection},
 };
 
 /// A setting group that can contain multiple setting items.
+///
+/// [`Settings`](super::Settings) renders each group as a [`SettingSection`]
+/// and each of its items as a [`SettingRow`](super::SettingRow).
 #[derive(Clone)]
 pub struct SettingGroup {
     style: StyleRefinement,
     footer: Option<Rc<dyn Fn(&mut Window, &mut App) -> AnyElement>>,
     variant: Option<GroupBoxVariant>,
+    pub(super) key: Option<u64>,
 
     pub(super) title: Option<SharedString>,
     pub(super) description: Option<SharedString>,
@@ -38,10 +40,26 @@ impl SettingGroup {
             style: StyleRefinement::default(),
             footer: None,
             variant: None,
+            key: None,
             title: None,
             description: None,
             items: Vec::new(),
         }
+    }
+
+    /// Cache the group's rendered content until `key` changes.
+    ///
+    /// Derive the key from every application value that affects the group's
+    /// content, style or callbacks. Entity-backed controls, such as an
+    /// `Input`, still redraw when their state notifies, and search, width,
+    /// size, group variant and theme changes refresh the group on their own.
+    /// A group without a key renders with its page, as before.
+    ///
+    /// The key is a revision, not an identity: when groups move or are
+    /// replaced, change the keys at the affected positions.
+    pub fn key(mut self, key: u64) -> Self {
+        self.key = Some(key);
+        self
     }
 
     /// Set the label of the setting group, default is None.
@@ -118,32 +136,25 @@ impl SettingGroup {
         window: &mut Window,
         cx: &mut App,
     ) -> impl IntoElement {
-        GroupBox::new()
-            .id(SharedString::from(format!("group-{}", options.group_ix())))
-            .with_variant(self.variant.unwrap_or(options.group_variant()))
-            .when_some(self.title.clone(), |this, title| {
-                this.title(v_flex().gap_1().child(title).when_some(
-                    self.description.clone(),
-                    |this, description| {
-                        this.child(
-                            Label::new(description)
-                                .text_sm()
-                                .text_color(cx.theme().muted_foreground),
-                        )
-                    },
-                ))
+        let items = self
+            .items
+            .iter()
+            .enumerate()
+            .filter_map(|(item_ix, item)| {
+                item.is_match(query, cx).then(|| {
+                    item.clone()
+                        .render_item(&options.with_item_ix(item_ix), window, cx)
+                })
             })
-            .gap_4()
-            .children(self.items.iter().enumerate().filter_map(|(item_ix, item)| {
-                if item.is_match(&query, cx) {
-                    Some(
-                        item.clone()
-                            .render_item(&options.with_item_ix(item_ix), window, cx),
-                    )
-                } else {
-                    None
-                }
-            }))
+            .collect::<Vec<_>>();
+
+        SettingSection::new(SharedString::from(format!("group-{}", options.group_ix())))
+            .with_variant(self.variant.unwrap_or(options.group_variant()))
+            .when_some(self.title, |this, title| this.title(title))
+            .when_some(self.description, |this, description| {
+                this.description(description)
+            })
+            .content(items)
             .when_some(self.footer, |this, footer| this.footer(footer(window, cx)))
             .refine_style(&self.style)
     }

@@ -14,6 +14,8 @@ We can search by title, description, and custom keywords to filter the settings 
 
 ```rust
 use gpui_kit::component::setting::{Settings, SettingPage, SettingGroup, SettingItem, SettingField};
+// Building blocks for an application-owned layout:
+use gpui_kit::component::setting::{SettingList, SettingRow, SettingSection};
 ```
 
 ## Usage
@@ -24,8 +26,8 @@ Here we have components that can be used to build a settings page.
 
 - [Settings] - The main settings component that holds multiple setting pages.
 - [SettingPage] - A page of related setting groups.
-- [SettingGroup] - A group of related setting items based on [GroupBox] style.
-- [SettingItem] - A single setting item with title, description, and field.
+- [SettingGroup] - A group of related setting items, rendered as a [SettingSection].
+- [SettingItem] - A single setting item with title, description, and field, rendered as a [SettingRow].
 - [SettingField] - Provide different field types like Input, Dropdown, Switch, etc.
 
 The layout of the settings is like this:
@@ -33,12 +35,16 @@ The layout of the settings is like this:
 ```
 Settings
   SettingPage
-    SettingGroup
-      SettingItem
-        Title
-        Description (optional)
-        SettingField
+    SettingGroup          -> SettingSection: title and description above a surface
+      SettingItem         -> SettingRow, separated from its siblings by a hairline
+        Title (info icon)
+        Description (optional, below the title)
+        SettingField      -> trailing control
 ```
+
+[SettingRow], [SettingSection] and [SettingList] are also usable on their own,
+when the application owns the page layout and navigation. See
+[Building Blocks](#building-blocks).
 
 ### Basic Settings
 
@@ -94,7 +100,24 @@ Clearing the search keeps the current page rather than restoring an earlier
 selection. When no settings match, no page content is shown and the selection
 is retained for when results return.
 
+### Narrow Widths
+
+When Settings is narrower than 480 px, the search field and a page picker
+take the sidebar's place above the active page, and every item uses the
+vertical layout. The picker lists the pages that match the search; choosing
+one opens that page. Tab moves from the search field to the picker and on
+into the page. Widening Settings brings the sidebar back with the same page
+selected.
+
 ### Group Variants
+
+The group variant decides the surface the items sit on. Items are always
+separated by hairlines, and the group's title and description sit above the
+surface:
+
+- `GroupBoxVariant::Normal` (default) - no surface; rows sit directly on the page.
+- `GroupBoxVariant::Outline` - a bordered card.
+- `GroupBoxVariant::Fill` - a filled, bordered card using the `group_box` color.
 
 ```rust
 use gpui_kit::component::group_box::GroupBoxVariant;
@@ -226,6 +249,27 @@ SettingGroup::new()
     .footer(|_, _| "Changes apply to this device only.")
 ```
 
+### Cache Independent Groups
+
+Pass `SettingGroup::key(u64)` to reuse a group's layout and paint between
+frames until the key changes. Derive it from every application value that
+affects the group's content, style or callbacks, such as a revision counter
+or a hash. Entity-backed controls such as `Input` still redraw when their
+state notifies, and search, available width, size, group variant and theme
+changes refresh the affected groups on their own.
+
+```rust
+SettingGroup::new()
+    .key(preferences_revision)
+    .title("Editing")
+    .items(editing_items)
+```
+
+The key is a revision, not an identity: if groups move or are replaced,
+change the keys at those positions. Groups without a key render with their
+page, as before. Keep page and group order stable while editing so controls
+keep their state.
+
 ## Setting Item
 
 ### Basic Item
@@ -233,6 +277,24 @@ SettingGroup::new()
 ```rust
 SettingItem::new("Title", SettingField::switch(...))
     .description("Description text")
+```
+
+The description is stacked below the title in smaller, muted type. When the
+row is too narrow for the title and the field side by side, the field wraps
+below the title.
+
+### Info
+
+Use `info` for supplementary help that most people do not need every time
+they read the item. It renders an info icon beside the title that shows the
+text in a tooltip; the icon is a keyboard stop and the text is its accessible
+label. Info text is searchable. What someone needs in order to choose belongs
+in the description instead.
+
+```rust
+SettingItem::new("Telemetry", SettingField::switch(...))
+    .description("Send anonymous usage counts.")
+    .info("File contents and names are never included.")
 ```
 
 ### Custom Item with a render closure
@@ -337,6 +399,105 @@ SettingItem::render(|options, _, _| {
 .keywords(["Advanced", "Network"])
 ```
 
+## Building Blocks
+
+[Settings] owns a complete page: sidebar, search and a scrolling list. When
+the application owns its page layout, navigation and search field, compose the
+same presentation from its parts. They hold no state: the application owns
+every value and control, and passes them in on each render.
+
+- [SettingRow] - a label with its description stacked below, an optional info
+  icon, and a trailing control or value.
+- [SettingSection] - a titled group of rows on one surface, separated by
+  hairlines, with an optional footer.
+- [SettingList] - sections narrowed by a search query the application owns.
+
+```rust
+use gpui_kit::component::{
+    group_box::GroupBoxVariants as _,
+    setting::{SettingList, SettingRow, SettingSection},
+    select::Select,
+    switch::Switch,
+};
+
+let general = SettingSection::new("general")
+    .title("General")
+    .description("How the application starts and behaves.")
+    .fill()
+    .row(
+        SettingRow::new("launch-at-login", "Open at login")
+            .description("Start in the background when you sign in.")
+            .switch(
+                Switch::new("launch-at-login-switch")
+                    .checked(launch_at_login)
+                    .on_click(|checked, _, cx| { /* store `*checked` */ }),
+            ),
+    )
+    .row(
+        SettingRow::new("density", "Density")
+            .info("Compact fits more rows on screen.")
+            .keywords(["comfortable", "compact"])
+            .control(Select::new(&density_state).w(rems(10.))),
+    )
+    .row(SettingRow::new("version", "Version").value("0.9.0"));
+
+SettingList::new("settings-list")
+    .query(search_input.read(cx).value())
+    .sections([general]);
+```
+
+### Setting Row
+
+- `control(element)` places any element on the trailing edge: a `Select`,
+  `Button`, `Input`, or a custom composite.
+- `switch(switch)` places a `Switch` and names it after the row's label.
+- `value(text)` shows muted trailing text when the row has no control, such as
+  a status.
+- `layout(Axis::Vertical)` always places a full-width control below the label.
+- `label_width(width)` sets the minimum label column width (default `7.5rem`);
+  the control wraps below the label once the row is narrower than this plus the
+  control. A section's `label_width` applies to rows that do not set their own.
+
+A disabled row is dimmed. A switch given through `switch` is disabled with it.
+The row does not reach into a control given through `control`, so pass a
+control that is disabled too and installs no action handler:
+
+```rust
+SettingRow::new("sync-now", "Sync now")
+    .disabled(!sync_enabled)
+    .control(
+        Button::new("sync-now-button")
+            .label("Sync Now")
+            .disabled(!sync_enabled)
+            .when(sync_enabled, |this| this.on_click(|_, _, cx| { /* sync */ })),
+    )
+```
+
+### Setting Section
+
+A section's surface follows its [GroupBox] variant through `normal()`,
+`outline()`, `fill()` or `with_variant(...)`; the default is `Normal`. Children
+added with `child` are full-width blocks among the rows, in call order, with
+the same padding and separators:
+
+```rust
+SettingSection::new("data")
+    .title("Data")
+    .outline()
+    .row(SettingRow::new("cache", "Offline data").control(remove_button))
+    .child(confirmation_panel)
+    .footer("Synced data stays in your account.")
+```
+
+### Setting List
+
+[SettingList] matches the query case-insensitively against section titles and
+descriptions, and row labels, descriptions, info, values and keywords. A
+section whose title or description matches keeps all its content; otherwise
+only matching rows remain, and blocks are dropped because their content is
+opaque to search. Order is preserved. Use `empty(element)` to replace the
+default no-results state.
+
 ## Setting Fields
 
 The [SettingField] enum provides different field types for various input needs.
@@ -396,7 +557,8 @@ SettingItem::new(
 
 ### Dropdown
 
-A dropdown with a list of options.
+A dropdown with a list of options. A label wider than the row is truncated with
+an ellipsis, and the menu shows it in full.
 
 ```rust
 SettingItem::new(
@@ -506,6 +668,9 @@ SettingItem::new(
 - [SettingGroup]
 - [SettingItem]
 - [SettingField]
+- [SettingSection]
+- [SettingRow]
+- [SettingList]
 - [NumberFieldOptions]
 
 ### Sizing
@@ -613,5 +778,8 @@ Settings::new("app-settings")
 [SettingField]: https://docs.rs/gpui-component/latest/gpui_component/setting/enum.SettingField.html
 [SettingFieldElement]: https://docs.rs/gpui-component/latest/gpui_component/setting/trait.SettingFieldElement.html
 [NumberFieldOptions]: https://docs.rs/gpui-component/latest/gpui_component/setting/struct.NumberFieldOptions.html
+[SettingSection]: https://docs.rs/gpui-component/latest/gpui_component/setting/struct.SettingSection.html
+[SettingRow]: https://docs.rs/gpui-component/latest/gpui_component/setting/struct.SettingRow.html
+[SettingList]: https://docs.rs/gpui-component/latest/gpui_component/setting/struct.SettingList.html
 [GroupBox]: ./group-box.md
 [Sizable]: https://docs.rs/gpui-component/latest/gpui_component/trait.Sizable.html

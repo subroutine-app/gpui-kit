@@ -1,56 +1,64 @@
 use gpui::{
-    Action, AsKeystroke, FocusHandle, Half, InteractiveElement as _, IntoElement, KeyBinding,
+    Action, App, AsKeystroke, FocusHandle, Half, InteractiveElement as _, IntoElement, KeyBinding,
     KeyContext, Keystroke, ParentElement as _, RenderOnce, StyleRefinement, Styled, Window, div,
-    prelude::FluentBuilder as _, relative,
+    px, relative, rems,
 };
 
 use gpui_base::TestTextExt as _;
 
-use crate::{ActiveTheme, StyledExt};
+use crate::{ActiveTheme, StyledExt, h_flex};
 
-/// A tag for displaying keyboard keybindings.
+/// A keyboard shortcut drawn as a key cap: a small rounded key with the whole
+/// shortcut on it, such as `Ctrl+Shift+Z` or `⇧⌘Z`, in the theme's monospace
+/// font. `font_family` picks another.
+///
+/// A shortcut of several keystrokes in a row, such as Emacs's `ctrl-x ctrl-s`,
+/// shows a cap for each keystroke.
 #[derive(IntoElement, Clone, Debug)]
 pub struct Kbd {
     style: StyleRefinement,
-    stroke: Keystroke,
+    /// The keystrokes, pressed one after another. Never empty.
+    strokes: Vec<Keystroke>,
     appearance: bool,
     outline: bool,
 }
 
 impl From<Keystroke> for Kbd {
     fn from(stroke: Keystroke) -> Self {
-        Self {
-            style: StyleRefinement::default(),
-            stroke,
-            appearance: true,
-            outline: false,
-        }
+        Self::new(stroke)
     }
 }
 
 impl Kbd {
     /// Create a new Kbd element with the given [`Keystroke`].
     pub fn new(stroke: Keystroke) -> Self {
+        Self::sequence(vec![stroke])
+    }
+
+    fn sequence(strokes: Vec<Keystroke>) -> Self {
+        debug_assert!(!strokes.is_empty());
         Self {
             style: StyleRefinement::default(),
-            stroke,
+            strokes,
             appearance: true,
             outline: false,
         }
     }
 
-    /// The keystroke this tag shows.
-    pub(crate) fn keystroke(&self) -> &Keystroke {
-        &self.stroke
+    /// The keystrokes this tag shows, in the order they are pressed.
+    pub(crate) fn keystrokes(&self) -> &[Keystroke] {
+        &self.strokes
     }
 
-    /// Set the appearance of the keybinding, default is `true`.
+    /// Draw the key cap, default is `true`. Without it the shortcut shows as
+    /// plain text.
     pub fn appearance(mut self, appearance: bool) -> Self {
         self.appearance = appearance;
         self
     }
 
-    /// Use outline style for the keybinding, default is `false`.
+    /// Fill the key cap with the theme's background rather than its muted
+    /// color, default is `false`.
     pub fn outline(mut self) -> Self {
         self.outline = true;
         self
@@ -96,8 +104,12 @@ impl Kbd {
     }
 
     fn from_binding(binding: &KeyBinding) -> Option<Self> {
-        let key = binding.keystrokes().first()?;
-        Some(Self::new(key.as_keystroke().clone()))
+        let strokes: Vec<Keystroke> = binding
+            .keystrokes()
+            .iter()
+            .map(|stroke| stroke.as_keystroke().clone())
+            .collect();
+        (!strokes.is_empty()).then(|| Self::sequence(strokes))
     }
 
     /// Return the Platform specific keybinding string by KeyStroke
@@ -232,40 +244,97 @@ impl Styled for Kbd {
 }
 
 impl RenderOnce for Kbd {
-    fn render(self, _: &mut gpui::Window, cx: &mut gpui::App) -> impl gpui::IntoElement {
+    fn render(self, _: &mut Window, cx: &mut App) -> impl IntoElement {
+        let label = self
+            .strokes
+            .iter()
+            .map(Self::format)
+            .collect::<Vec<_>>()
+            .join(" ");
         if !self.appearance {
-            return Self::format(&self.stroke).into_any_element();
+            return label.into_any_element();
         }
 
-        div()
+        let theme = cx.theme();
+        // The edge takes the hint's own text color, so the cap keeps its
+        // outline on any surface, a menu's highlighted row among them.
+        let edge = theme.muted_foreground.opacity(0.35);
+        let background = if self.outline {
+            theme.tokens.background
+        } else {
+            theme.tokens.muted
+        };
+        let cap = |text: String| {
+            div()
+                .px_1()
+                .py(px(1.))
+                .min_w_5()
+                .text_center()
+                .whitespace_nowrap()
+                .rounded(theme.radius.half().min(px(4.)))
+                .border_1()
+                .border_b_2()
+                .border_color(edge)
+                .bg(background)
+                .child(text)
+        };
+        let os = cx.platform_info().os;
+        let selector = self
+            .strokes
+            .iter()
+            .map(|stroke| stroke.unparse(os))
+            .collect::<Vec<_>>()
+            .join(" ");
+
+        // One keystroke is one cap, which takes the element's style. A
+        // sequence lays its caps out in a row, which takes it instead.
+        let element = match self.strokes.as_slice() {
+            [stroke] => cap(Self::format(stroke)),
+            strokes => h_flex()
+                .gap_0p5()
+                .children(strokes.iter().map(|stroke| cap(Self::format(stroke)))),
+        };
+        element
             // Lets a test ask whether a given shortcut hint was painted this
             // frame; a no-op outside test-support builds.
-            .debug_selector(|| format!("kbd:{}", self.stroke.unparse(cx.platform_info().os)))
-            .text_color(cx.theme().muted_foreground)
-            .bg(cx.theme().tokens.muted)
-            .when(self.outline, |this| {
-                this.border_1()
-                    .border_color(cx.theme().border)
-                    .bg(cx.theme().tokens.background)
-            })
-            .py_0p5()
-            .px_1()
-            .min_w_5()
-            .text_center()
-            .rounded(cx.theme().radius.half())
-            .line_height(relative(1.))
-            .text_xs()
-            .whitespace_normal()
+            .debug_selector(|| format!("kbd:{selector}"))
             .flex_shrink_0()
+            .text_color(theme.muted_foreground)
+            .font_family(theme.mono_font_family.clone())
+            .font_features(theme.mono_font_features.clone())
+            // A monospace font looks larger than the interface font at the
+            // same size, so the cap's text is a step below extra small.
+            .text_size(rems(0.6875))
+            .line_height(relative(1.))
             .refine_style(&self.style)
-            .child(Self::format(&self.stroke))
-            .test_text(Self::format(&self.stroke))
+            .test_text(label)
             .into_any_element()
     }
 }
 
 #[cfg(test)]
 mod tests {
+    /// A binding of several keystrokes keeps them all, in order.
+    #[test]
+    fn a_binding_keeps_every_keystroke() {
+        use super::Kbd;
+        use gpui::{KeyBinding, Keystroke, NoAction};
+
+        let kbd = Kbd::from_binding(&KeyBinding::new("ctrl-x ctrl-s", NoAction, None)).unwrap();
+        assert_eq!(
+            kbd.keystrokes(),
+            [
+                Keystroke::parse("ctrl-x").unwrap(),
+                Keystroke::parse("ctrl-s").unwrap()
+            ]
+        );
+        let kbd = Kbd::from_binding(&KeyBinding::new("ctrl-shift-z", NoAction, None)).unwrap();
+        assert_eq!(
+            kbd.keystrokes(),
+            [Keystroke::parse("ctrl-shift-z").unwrap()]
+        );
+    }
+
     #[test]
     fn test_format() {
         use super::Kbd;

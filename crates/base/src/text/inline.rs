@@ -29,7 +29,7 @@ use crate::{
     input::Selection,
     text::TextViewMultiClickKind,
     text::node::LinkMark,
-    text::range_highlight::RevealAt,
+    text::range_highlight::{HighlightPaint, RevealAt},
     text::selection::word_range_at,
     text::state::LineSpan,
     text::text_view::{LinkClickHandlerFn, handle_link_click},
@@ -363,8 +363,9 @@ pub(super) struct Inline {
     paint_origin: Option<Point<Pixels>>,
     selection_bounds: Option<Bounds<Pixels>>,
     selection_source: Option<(Arc<Mutex<InlineState>>, Range<usize>)>,
-    /// Range highlight backgrounds, painted behind the text.
-    range_backgrounds: Vec<(Range<usize>, Hsla)>,
+    /// Range highlights, whose backgrounds are painted behind the text and
+    /// whose text colors its glyphs are painted in.
+    range_highlights: Vec<(Range<usize>, HighlightPaint)>,
     /// The start of a pending reveal, when it is in this text.
     reveal: Option<RevealAt>,
     link_click_handler: Option<Arc<LinkClickHandlerFn>>,
@@ -667,13 +668,13 @@ impl Inline {
             let layout = self.styled_text.layout();
             let end = start + layout.len();
             sink.report_text_piece(key, start, layout);
-            self.range_backgrounds
+            self.range_highlights
                 .extend(
                     sink.backgrounds(key)
                         .into_iter()
                         .filter_map(|(range, color)| {
                             let (lo, hi) = (range.start.max(start), range.end.min(end));
-                            (lo < hi).then(|| (lo - start..hi - start, color))
+                            (lo < hi).then(|| (lo - start..hi - start, HighlightPaint::from(color)))
                         }),
                 );
             return;
@@ -682,7 +683,11 @@ impl Inline {
             return;
         };
         sink.report(key, self.styled_text.layout());
-        self.range_backgrounds.extend(sink.backgrounds(key));
+        self.range_highlights.extend(
+            sink.backgrounds(key)
+                .into_iter()
+                .map(|(range, color)| (range, HighlightPaint::from(color))),
+        );
     }
 
     /// Hands the shaped text to the next frame (see [`RetainedLayout`]).
@@ -751,7 +756,7 @@ impl Inline {
             paint_origin: None,
             selection_bounds: None,
             selection_source: None,
-            range_backgrounds: Vec::new(),
+            range_highlights: Vec::new(),
             reveal: None,
             link_click_handler,
             retained_key: None,
@@ -794,10 +799,14 @@ impl Inline {
         self
     }
 
-    /// Paint `backgrounds` behind the text. They are not part of the text
+    /// Paint the backgrounds of `range_highlights` behind the text, and the
+    /// glyphs they cover in their text colors. Neither is part of the text
     /// runs, so changing them does not shape the text again.
-    pub(super) fn range_backgrounds(mut self, backgrounds: Vec<(Range<usize>, Hsla)>) -> Self {
-        self.range_backgrounds = backgrounds;
+    pub(super) fn range_highlights(
+        mut self,
+        range_highlights: Vec<(Range<usize>, HighlightPaint)>,
+    ) -> Self {
+        self.range_highlights = range_highlights;
         self
     }
 
@@ -1137,17 +1146,33 @@ impl Inline {
         );
         let origin = text_layout.bounds().origin;
         let line_height = text_layout.line_height();
-        for (range, color) in &self.range_backgrounds {
+        for (range, paint) in &self.range_highlights {
             for (row, left, right) in range_boxes(&glyphs, range.clone()) {
                 window.paint_quad(gpui::fill(
                     Bounds::from_corners(
                         point(origin.x + left, origin.y + line_height * row as f32),
                         point(origin.x + right, origin.y + line_height * (row + 1) as f32),
                     ),
-                    *color,
+                    paint.background,
                 ));
             }
         }
+    }
+
+    /// Paint the glyphs, those under a range highlight with a text color in
+    /// that color. The text keeps its layout.
+    fn paint_foreground(&self, text_layout: &TextLayout, window: &mut Window, cx: &mut App) {
+        let text_colors = self
+            .range_highlights
+            .iter()
+            .filter_map(|(range, paint)| Some((range.clone(), paint.text_color?)))
+            .collect::<Vec<_>>();
+        #[cfg(not(feature = "gpui-fast"))]
+        let _ = text_layout.paint_foreground_with_colors(&text_colors, window, cx);
+        // The GPUI Fast backend is not vendored and has no recolored paint,
+        // so there the text keeps its own colors.
+        #[cfg(feature = "gpui-fast")]
+        let _ = (text_colors, text_layout.paint_foreground(window, cx));
     }
 }
 
@@ -1262,7 +1287,7 @@ impl Element for Inline {
             return;
         }
         let text_layout = self.styled_text.layout().clone();
-        if !self.range_backgrounds.is_empty() {
+        if !self.range_highlights.is_empty() {
             self.paint_range_highlights(&text_layout, window);
         }
         _ = text_layout.paint_background(window, cx);
@@ -1272,7 +1297,7 @@ impl Element for Inline {
             self.layout_selections(&text_layout, &bounds, cx);
 
         let Ok(mut state) = self.state.lock() else {
-            _ = text_layout.paint_foreground(window, cx);
+            self.paint_foreground(&text_layout, window, cx);
             return;
         };
 
@@ -1323,7 +1348,7 @@ impl Element for Inline {
             }
         }
 
-        _ = text_layout.paint_foreground(window, cx);
+        self.paint_foreground(&text_layout, window, cx);
 
         if is_selectable {
             if let Some(text_view_state) = GlobalState::global(cx).text_view_state() {
@@ -1488,6 +1513,11 @@ impl Element for Inline {
                     if let Some(link) =
                         Self::link_for_position(&text_layout, &links, event.position)
                     {
+                        // Without a handler a right-click opens nothing here,
+                        // so it goes on to the menu of the selectable text.
+                        if link_click_handler.is_none() && event.button == MouseButton::Right {
+                            return;
+                        }
                         TextSelection::end(window, cx);
                         cx.stop_propagation();
                         let click = ClickEvent::Mouse(MouseClickEvent {

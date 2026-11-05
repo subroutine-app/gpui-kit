@@ -77,6 +77,10 @@ let style = TextViewStyle::default()
 TextView::markdown("themed", source).style(style)
 ```
 
+A fenced code block has a 1 px outline in the border color. `with_code_border(color)` gives it a color of its own, for a code background that can match the page. The component theme sets it to the theme's `border`. Code blocks and inline code are set in `TypographyTokens::mono` with the OpenType features in `TypographyTokens::mono_features`; empty features keep the font's own defaults.
+
+`with_paragraph_gap(rems(...))` sets the paragraph gap, also used after tables in wrapping and horizontal-scroll layouts. A final table has no outside bottom gap, like a final paragraph.
+
 Heading refinements receive the Markdown heading level (1-6) and are applied
 on top of the built-in size, weight, and spacing for that level:
 
@@ -273,6 +277,8 @@ something is still fading. Reduced motion skips the fade.
 `rendered_text()`, the text plain copy produces, so an application can show
 its search results or citations without reparsing or restyling the document.
 The ranges are painted, not shaped, so they never change layout.
+`RangeHighlight::with_text_color` also draws the text of a range in a color of
+its own.
 Ranges of the Markdown source, such as those `selected_source_range()`
 returns, convert to it with `rendered_text().range_for_source(range)`.
 `reveal_range` scrolls the line a range starts on into view, through the

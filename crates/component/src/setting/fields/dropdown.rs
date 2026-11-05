@@ -1,8 +1,8 @@
 use std::rc::Rc;
 
 use gpui::{
-    Anchor, AnyElement, App, IntoElement, SharedString, StyleRefinement, Styled, Window,
-    prelude::FluentBuilder as _,
+    Anchor, AnyElement, App, InteractiveElement as _, IntoElement, SharedString, StyleRefinement,
+    Styled, Window, prelude::FluentBuilder as _,
 };
 
 use crate::{
@@ -64,7 +64,13 @@ where
 
         Button::new("btn")
             .when(options.layout().is_vertical(), |this| this.w_full())
+            .when(cfg!(test), |this| {
+                let selector = format!("setting-dropdown-item-{}", options.item_ix());
+                this.debug_selector(move || selector)
+            })
             .accessibility_label(format!("{}: {}", self.title, old_label))
+            // A label longer than the row truncates. The menu shows it in full.
+            .max_w_full()
             .label(old_label)
             .dropdown_caret(true)
             .outline()
@@ -90,6 +96,7 @@ where
                 });
                 menu.scrollable(scrollable)
             })
+            .max_w_full()
             .into_any_element()
     }
 }

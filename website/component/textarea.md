@@ -87,8 +87,59 @@ cx.subscribe(&notes, |this, state, event: &InputEvent, cx| {
 });
 ```
 
-`insert`, `replace`, `cursor_position`, `soft_wrap`, `searchable`, and
-`submit_on_enter` are available on `TextareaState`.
+`insert`, `replace`, `cursor_position`, `soft_wrap`, and `searchable` are
+available on `TextareaState`.
+
+## Send key
+
+A chat composer submits with a key instead of breaking the line.
+`submit_keys` takes the Enter chords that submit: any of `SubmitKey::Enter`,
+`SubmitKey::ShiftEnter` and `SubmitKey::SecondaryEnter` (Cmd+Enter on macOS,
+Ctrl+Enter elsewhere). A submitting chord inserts nothing: the textarea emits
+`InputEvent::PressEnter` and hands the `Enter` action on to the elements around
+it. The other chords break the line. Without submit keys, the default, every
+chord breaks the line.
+
+```rust
+use gpui_kit::component::input::{InputEvent, SubmitKey, TextareaState};
+
+let composer = cx.new(|cx| {
+    TextareaState::new(window, cx)
+        .auto_grow(1, 5)
+        .submit_keys([SubmitKey::Enter, SubmitKey::SecondaryEnter])
+});
+
+cx.subscribe_in(&composer, window, |this, state, event: &InputEvent, window, cx| {
+    if let InputEvent::PressEnter { secondary, shift } = event
+        && state.read(cx).is_submit_chord(*secondary, *shift)
+    {
+        this.send(state.read(cx).value());
+        state.update(cx, |state, cx| state.set_value("", window, cx));
+    }
+});
+```
+
+`PressEnter` is emitted for the line-breaking chords too, so check
+`is_submit_chord` (or `SubmitKey::matches`) before sending. `set_submit_keys`
+changes the keys at run time, for a setting that lets the user pick, and
+`SubmitKey` serializes as `"enter"`, `"shift_enter"` and `"secondary_enter"`
+for a settings file. `submit_on_enter(true)` is the same as
+`submit_keys([SubmitKey::Enter, SubmitKey::SecondaryEnter])`.
+
+Because a submitting chord goes on to the key bindings around the textarea,
+a composer that also binds Cmd+Enter or Ctrl+Enter around it to send would
+send twice on one press. Send from `PressEnter` or from the binding, not both.
+While an input method is composing, Enter only commits the composition: it
+neither submits nor breaks the line. A single-line input always hands Enter
+on, whatever its submit keys.
+
+## Smooth caret
+
+`smooth_caret(true)` glides the caret along its row as you type, delete and
+move with the arrow keys, and uncovers each typed character as the caret
+passes it. `set_app_smooth_caret` turns it on for every field that doesn't
+choose for itself. See [Input: Smooth Caret](./input.md#smooth-caret) for the
+options and when the caret moves at once.
 
 ## Sizes
 

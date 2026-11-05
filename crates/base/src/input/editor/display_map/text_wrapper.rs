@@ -1055,6 +1055,38 @@ impl LineLayout {
         self.len
     }
 
+    /// Where row `ix` starts, measured from the left edge of the line's content: its indent,
+    /// then the alignment's offset. Caret positions start rows here too.
+    pub(crate) fn row_x(&self, ix: usize, last_layout: &LastLayout) -> Pixels {
+        self.line_indent(ix) + last_layout.alignment_offset(self.longest_width)
+    }
+
+    /// The row the caret at byte `offset` of the line is drawn on, the byte that row starts
+    /// at, and the caret's x in the row. `line_end_affinity` puts an offset on a wrap boundary
+    /// at the end of the row before, as [`Self::position_for_index`] does.
+    pub(crate) fn caret_row(
+        &self,
+        offset: usize,
+        line_end_affinity: bool,
+    ) -> Option<(usize, usize, Pixels)> {
+        let mut start = 0;
+        for (ix, row) in self.wrapped_lines.iter().enumerate() {
+            let is_last = ix + 1 == self.wrapped_lines.len();
+            let matches = if row.len == 0 {
+                offset == start
+            } else if is_last || line_end_affinity {
+                (start..=start + row.len).contains(&offset)
+            } else {
+                (start..start + row.len).contains(&offset)
+            };
+            if matches {
+                return Some((ix, start, row.x_for_index(offset - start)));
+            }
+            start += row.len;
+        }
+        None
+    }
+
     /// Get the position (x, y) for the given index in this line layout.
     ///
     /// - The `offset` is a local byte index in this line layout.
@@ -1243,7 +1275,28 @@ impl LineLayout {
             return;
         }
 
-        for (ix, line) in self.wrapped_lines.iter().enumerate() {
+        for ix in 0..self.wrapped_lines.len() {
+            self.paint_row_background(ix, pos, line_height, text_align, align_width, window, cx);
+        }
+    }
+
+    /// Paint the glyph background quads of the visual line `ix` alone. `pos` is the origin of
+    /// the whole line, as for [`Self::paint_background`].
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn paint_row_background(
+        &self,
+        ix: usize,
+        pos: Point<Pixels>,
+        line_height: Pixels,
+        text_align: TextAlign,
+        align_width: Option<Pixels>,
+        window: &mut Window,
+        cx: &mut App,
+    ) {
+        if !self.has_background {
+            return;
+        }
+        if let Some(line) = self.wrapped_lines.get(ix) {
             _ = line.paint_background(
                 pos + point(self.line_indent(ix), ix * line_height),
                 line_height,
@@ -1264,20 +1317,45 @@ impl LineLayout {
         window: &mut Window,
         cx: &mut App,
     ) {
-        for (ix, line) in self.wrapped_lines.iter().enumerate() {
-            _ = line.paint(
-                pos + point(self.line_indent(ix), ix * line_height),
-                line_height,
-                text_align,
-                align_width,
-                window,
-                cx,
-            );
+        for ix in 0..self.wrapped_lines.len() {
+            self.paint_row(ix, pos, line_height, text_align, align_width, window, cx);
         }
+    }
 
-        // Paint whitespace indicators
+    /// Paint the visual line `ix` alone, with its whitespace indicators. `pos` is the origin of
+    /// the whole line, as for [`Self::paint`].
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn paint_row(
+        &self,
+        ix: usize,
+        pos: Point<Pixels>,
+        line_height: Pixels,
+        text_align: TextAlign,
+        align_width: Option<Pixels>,
+        window: &mut Window,
+        cx: &mut App,
+    ) {
+        let Some(line) = self.wrapped_lines.get(ix) else {
+            return;
+        };
+        _ = line.paint(
+            pos + point(self.line_indent(ix), ix * line_height),
+            line_height,
+            text_align,
+            align_width,
+            window,
+            cx,
+        );
+
+        // Whitespace indicators are recorded row by row.
         if let Some(indicators) = self.whitespace_indicators.as_ref() {
-            for (line_index, x_position, is_tab) in &self.whitespace_chars {
+            let first = self
+                .whitespace_chars
+                .partition_point(|(line_index, _, _)| *line_index < ix);
+            for (_, x_position, is_tab) in self.whitespace_chars[first..]
+                .iter()
+                .take_while(|(line_index, _, _)| *line_index == ix)
+            {
                 let invisible = if *is_tab {
                     indicators.tab.clone()
                 } else {
@@ -1285,8 +1363,8 @@ impl LineLayout {
                 };
 
                 let origin = point(
-                    pos.x + *x_position + self.line_indent(*line_index),
-                    pos.y + *line_index as f32 * line_height,
+                    pos.x + *x_position + self.line_indent(ix),
+                    pos.y + ix as f32 * line_height,
                 );
 
                 _ = invisible.paint(origin, line_height, text_align, align_width, window, cx);

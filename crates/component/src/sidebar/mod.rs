@@ -11,7 +11,7 @@ use gpui::{
     RenderOnce, SharedString, StyleRefinement, Styled, Window, div, list, prelude::FluentBuilder,
     px,
 };
-use std::{rc::Rc, time::Duration};
+use std::{cell::RefCell, rc::Rc, time::Duration};
 
 use crate::animation::{EffectTransition, ease_in_out_cubic};
 
@@ -23,6 +23,37 @@ pub use footer::*;
 pub use group::*;
 pub use header::*;
 pub use menu::*;
+
+pub(crate) fn init(cx: &mut App) {
+    menu::init(cx);
+}
+
+thread_local! {
+    /// The list of the sidebar that is rendering an item right now.
+    static LIST: RefCell<Option<ListState>> = const { RefCell::new(None) };
+}
+
+/// Puts the list `list_state` back as it was when dropped.
+struct ListScope(Option<ListState>);
+
+impl ListScope {
+    /// Makes `list_state` the list a [`SidebarMenu`] rendered meanwhile
+    /// scrolls to reveal the item that takes focus.
+    fn enter(list_state: &ListState) -> Self {
+        Self(LIST.replace(Some(list_state.clone())))
+    }
+}
+
+impl Drop for ListScope {
+    fn drop(&mut self) {
+        LIST.set(self.0.take());
+    }
+}
+
+/// The list of the [`Sidebar`] that renders the caller, if one does.
+fn current_list() -> Option<ListState> {
+    LIST.with_borrow(Clone::clone)
+}
 
 const DEFAULT_WIDTH: Pixels = px(255.);
 const COLLAPSED_WIDTH: Pixels = px(48.);
@@ -165,6 +196,19 @@ impl SidebarAnimationState {
         }
     }
 
+    /// Jump straight to `target_width`, mounting or unmounting the content
+    /// at once and cancelling a pending hide: the snap of a zero-length
+    /// transition.
+    fn settle(&mut self, target_width: Pixels, offcanvas_collapsed: bool) {
+        self.from_width = target_width;
+        self.target_width = target_width;
+        self.render_child = !offcanvas_collapsed;
+        if self.hide_scheduled {
+            self.hide_request = self.hide_request.wrapping_add(1);
+        }
+        self.hide_scheduled = false;
+    }
+
     fn finish_hide(&mut self, request: u64) -> bool {
         if self.render_child
             && self.hide_scheduled
@@ -231,6 +275,7 @@ pub struct Sidebar<E: SidebarItem + 'static> {
     side: Side,
     collapsible: SidebarCollapsible,
     collapsed: bool,
+    transition_duration: Option<Duration>,
 }
 
 impl<E: SidebarItem> Sidebar<E> {
@@ -245,6 +290,7 @@ impl<E: SidebarItem> Sidebar<E> {
             side: Side::Left,
             collapsible: SidebarCollapsible::Icon,
             collapsed: false,
+            transition_duration: None,
         }
     }
 
@@ -269,6 +315,17 @@ impl<E: SidebarItem> Sidebar<E> {
     /// Set the sidebar to be collapsed
     pub fn collapsed(mut self, collapsed: bool) -> Self {
         self.collapsed = collapsed;
+        self
+    }
+
+    /// Set how long collapsing and expanding takes. `Duration::ZERO` snaps
+    /// between the two widths in one frame. Defaults to 200 ms.
+    ///
+    /// A sidebar toggled often, beside content that reflows with its width,
+    /// is a good candidate for a snap: a glide re-lays out that content on
+    /// every frame of it.
+    pub fn transition_duration(mut self, duration: Duration) -> Self {
+        self.transition_duration = Some(duration);
         self
     }
 
@@ -410,6 +467,8 @@ impl<E: SidebarItem> RenderOnce for Sidebar<E> {
         let layout =
             SidebarLayout::new(self.collapsible, self.collapsed, expanded_width, self.side);
 
+        let scroll_list = list_state.clone();
+
         // Sidebar content renders at its target width immediately. A wrapper
         // div animates clip-width for smooth transitions without re-laying out
         // sidebar content each animation frame.
@@ -464,6 +523,7 @@ impl<E: SidebarItem> RenderOnce for Sidebar<E> {
                                     div()
                                         .id(ix)
                                         .when_some(group, |this, group| {
+                                            let _list = ListScope::enter(&scroll_list);
                                             this.child(
                                                 group
                                                     .collapsed(layout.icon_collapsed)
@@ -514,6 +574,19 @@ impl<E: SidebarItem> RenderOnce for Sidebar<E> {
         let animation_state = window.use_keyed_state(format!("{}-anim-w", id), cx, |_, _| {
             SidebarAnimationState::new(target_width, !layout.offcanvas_collapsed)
         });
+        let duration = self
+            .transition_duration
+            .unwrap_or(SIDEBAR_TRANSITION_DURATION);
+        if duration.is_zero() {
+            // Snap: settle the state too, so a later glide starts from here.
+            animation_state.update(cx, |state, _| {
+                state.settle(target_width, layout.offcanvas_collapsed)
+            });
+            return sidebar_wrapper(format!("{}-anim", id), layout.align_child_to_end)
+                .w(target_width)
+                .when(!layout.offcanvas_collapsed, |this| this.child(sidebar))
+                .into_any_element();
+        }
 
         let hide_request = if animation_state
             .read(cx)
@@ -529,9 +602,7 @@ impl<E: SidebarItem> RenderOnce for Sidebar<E> {
             cx.spawn({
                 let animation_state = animation_state.clone();
                 async move |cx| {
-                    cx.background_executor()
-                        .timer(SIDEBAR_TRANSITION_DURATION)
-                        .await;
+                    cx.background_executor().timer(duration).await;
                     _ = animation_state.update(cx, |state, cx| {
                         if state.finish_hide(hide_request) {
                             cx.notify();
@@ -548,7 +619,7 @@ impl<E: SidebarItem> RenderOnce for Sidebar<E> {
         let wrapper = sidebar_wrapper(format!("{}-anim", id), layout.align_child_to_end)
             .when(animation_state.render_child, |this| this.child(sidebar));
 
-        EffectTransition::new(SIDEBAR_TRANSITION_DURATION)
+        EffectTransition::new(duration)
             .ease(ease_in_out_cubic)
             .width(from_w, to_w)
             .apply(wrapper, sidebar_animation_id(&id, from_w, to_w))
@@ -776,5 +847,323 @@ mod tests {
         assert!(!state.render_child);
         assert_eq!(state.from_width, px(0.));
         assert_eq!(state.target_width, px(0.));
+    }
+
+    #[test]
+    fn settling_should_jump_to_the_target_and_cancel_a_pending_hide() {
+        let mut state = SidebarAnimationState::new(px(240.), true);
+        let request = state.update_target(px(0.), true).unwrap();
+
+        state.settle(px(0.), true);
+        assert_eq!((state.from_width, state.target_width), (px(0.), px(0.)));
+        assert!(!state.render_child);
+        assert!(!state.finish_hide(request), "the stale hide must not run");
+
+        state.settle(px(240.), false);
+        assert_eq!((state.from_width, state.target_width), (px(240.), px(240.)));
+        assert!(state.render_child);
+    }
+
+    struct SidebarHost {
+        collapsed: bool,
+        duration: Option<Duration>,
+    }
+
+    impl gpui::Render for SidebarHost {
+        fn render(&mut self, _: &mut Window, _: &mut gpui::Context<Self>) -> impl IntoElement {
+            h_flex().size_full().child(
+                div()
+                    .flex_none()
+                    .h_full()
+                    .debug_selector(|| "host".into())
+                    .child(
+                        Sidebar::<SidebarMenu>::new("sidebar")
+                            .collapsed(self.collapsed)
+                            .when_some(self.duration, |this, duration| {
+                                this.transition_duration(duration)
+                            }),
+                    ),
+            )
+        }
+    }
+
+    /// The width the sidebar takes on the first frame after collapsing.
+    fn width_after_collapsing(duration: Option<Duration>, cx: &mut gpui::TestAppContext) -> Pixels {
+        cx.update(crate::init);
+        let (host, cx) = cx.add_window_view(|_, _| SidebarHost {
+            collapsed: false,
+            duration,
+        });
+        cx.update(|window, cx| window.draw(cx).clear(cx));
+        host.update(cx, |host, cx| {
+            host.collapsed = true;
+            cx.notify();
+        });
+        cx.update(|window, cx| window.draw(cx).clear(cx));
+        cx.debug_bounds("host").unwrap().size.width
+    }
+
+    #[gpui::test]
+    fn a_zero_transition_snaps_to_the_collapsed_width(cx: &mut gpui::TestAppContext) {
+        assert_eq!(
+            width_after_collapsing(Some(Duration::ZERO), cx),
+            COLLAPSED_WIDTH
+        );
+    }
+
+    #[gpui::test]
+    fn the_default_transition_glides_from_the_expanded_width(cx: &mut gpui::TestAppContext) {
+        assert!(width_after_collapsing(None, cx) > COLLAPSED_WIDTH);
+    }
+
+    mod keyboard_scroll {
+        use super::*;
+        use gpui::{
+            AppContext as _, Bounds, ScrollDelta, ScrollHandle, ScrollWheelEvent,
+            StatefulInteractiveElement as _, TestAppContext, VisualTestContext, point,
+        };
+
+        /// A sidebar 200px tall holding one menu of 30 items, which is far
+        /// taller than the sidebar and one item of its list. The active item
+        /// is the one Tab reaches. A control before the sidebar has focus to
+        /// begin with.
+        struct TallSidebar {
+            active: usize,
+            before: gpui::FocusHandle,
+            focused_before: bool,
+        }
+
+        impl gpui::Render for TallSidebar {
+            fn render(
+                &mut self,
+                window: &mut Window,
+                cx: &mut gpui::Context<Self>,
+            ) -> impl IntoElement {
+                if !std::mem::replace(&mut self.focused_before, true) {
+                    self.before.focus(window, cx);
+                }
+                v_flex()
+                    .child(div().id("before").size_0().track_focus(&self.before))
+                    .child(
+                        div()
+                            .w(px(255.))
+                            .h(px(200.))
+                            .debug_selector(|| "sidebar".into())
+                            .child(Sidebar::<SidebarMenu>::new("tall").child(
+                                SidebarMenu::new().children((0..30).map(|ix| {
+                                    SidebarMenuItem::new(format!("Item {ix}"))
+                                        .active(ix == self.active)
+                                        .suffix(move |_, _| {
+                                            div()
+                                                .w(px(2.))
+                                                .h(px(2.))
+                                                .debug_selector(move || format!("item-{ix}"))
+                                        })
+                                })),
+                            )),
+                    )
+            }
+        }
+
+        /// A menu of 30 items without a sidebar, in a scroll container of the
+        /// application's own, 200px tall and named "sidebar" for the helpers
+        /// below. The menu sits under a heading, so it isn't the container's
+        /// first child.
+        struct MenuInOwnContainer {
+            scroll_handle: ScrollHandle,
+            before: gpui::FocusHandle,
+            focused_before: bool,
+        }
+
+        impl gpui::Render for MenuInOwnContainer {
+            fn render(
+                &mut self,
+                window: &mut Window,
+                cx: &mut gpui::Context<Self>,
+            ) -> impl IntoElement {
+                if !std::mem::replace(&mut self.focused_before, true) {
+                    self.before.focus(window, cx);
+                }
+                let menu = SidebarMenu::new()
+                    .track_scroll(&self.scroll_handle)
+                    .children((0..30).map(|ix| {
+                        SidebarMenuItem::new(format!("Item {ix}")).suffix(move |_, _| {
+                            div()
+                                .w(px(2.))
+                                .h(px(2.))
+                                .debug_selector(move || format!("item-{ix}"))
+                        })
+                    }));
+                v_flex()
+                    .child(div().id("before").size_0().track_focus(&self.before))
+                    .child(
+                        div()
+                            .id("container")
+                            .w(px(255.))
+                            .h(px(200.))
+                            .overflow_y_scroll()
+                            .track_scroll(&self.scroll_handle)
+                            .debug_selector(|| "sidebar".into())
+                            .child(div().h(px(40.)).child("Menu"))
+                            .child(menu.render("menu", window, cx)),
+                    )
+            }
+        }
+
+        /// A window where focus is on the control before the sidebar.
+        fn open_unfocused(active: usize, cx: &mut TestAppContext) -> &mut VisualTestContext {
+            cx.update(crate::init);
+            let (_, cx) = cx.add_window_view(|window, cx| {
+                let view = cx.new(|cx| TallSidebar {
+                    active,
+                    before: cx.focus_handle().tab_stop(true),
+                    focused_before: false,
+                });
+                crate::Root::new(view, window, cx)
+            });
+            draw(cx);
+            cx
+        }
+
+        /// A window where Tab has taken focus into the sidebar.
+        fn open(cx: &mut TestAppContext) -> &mut VisualTestContext {
+            let cx = open_unfocused(0, cx);
+            press(cx, "tab");
+            cx
+        }
+
+        /// Draws the frames a key press takes to scroll and settle.
+        fn draw(cx: &mut VisualTestContext) {
+            for _ in 0..4 {
+                cx.update(|window, cx| window.draw(cx).clear(cx));
+            }
+        }
+
+        fn press(cx: &mut VisualTestContext, keys: &str) {
+            cx.simulate_keystrokes(keys);
+            draw(cx);
+        }
+
+        /// Where item `ix` is drawn, if it is drawn.
+        fn item(cx: &mut VisualTestContext, ix: usize) -> Option<Bounds<Pixels>> {
+            // The selector has to live as long as the program, which a test
+            // that leaks a few short strings doesn't mind.
+            cx.debug_bounds(Box::leak(format!("item-{ix}").into_boxed_str()))
+        }
+
+        fn in_view(cx: &mut VisualTestContext, ix: usize) -> bool {
+            let sidebar = cx.debug_bounds("sidebar").unwrap();
+            item(cx, ix).is_some_and(|item| {
+                item.top() >= sidebar.top() && item.bottom() <= sidebar.bottom()
+            })
+        }
+
+        #[gpui::test]
+        fn arrow_keys_scroll_the_focused_item_into_view(cx: &mut TestAppContext) {
+            let cx = open(cx);
+            assert!(in_view(cx, 0));
+
+            for ix in 1..30 {
+                press(cx, "down");
+                assert!(
+                    in_view(cx, ix),
+                    "Down moved focus to item {ix}, out of view"
+                );
+            }
+            press(cx, "down");
+            assert!(
+                in_view(cx, 0),
+                "focus wraps to the first item, which scrolls back"
+            );
+            press(cx, "end");
+            assert!(in_view(cx, 29), "End goes to the last item");
+            press(cx, "home");
+            assert!(in_view(cx, 0), "Home goes to the first item");
+            press(cx, "up");
+            assert!(in_view(cx, 29), "Up from the first item wraps to the last");
+            press(cx, "up");
+            assert!(in_view(cx, 28));
+        }
+
+        #[gpui::test]
+        fn a_menu_in_the_applications_own_container_scrolls_to_the_focused_item(
+            cx: &mut TestAppContext,
+        ) {
+            cx.update(crate::init);
+            let (_, cx) = cx.add_window_view(|window, cx| {
+                let view = cx.new(|cx| MenuInOwnContainer {
+                    scroll_handle: ScrollHandle::new(),
+                    before: cx.focus_handle().tab_stop(true),
+                    focused_before: false,
+                });
+                crate::Root::new(view, window, cx)
+            });
+            draw(cx);
+            press(cx, "tab");
+            assert!(in_view(cx, 0));
+            assert!(!in_view(cx, 29));
+
+            press(cx, "end");
+            assert!(in_view(cx, 29), "End goes to the last item");
+            press(cx, "home");
+            assert!(in_view(cx, 0), "Home goes to the first item");
+        }
+
+        #[gpui::test]
+        fn tab_scrolls_to_the_active_item_it_reaches(cx: &mut TestAppContext) {
+            let cx = open_unfocused(22, cx);
+            assert!(!in_view(cx, 22));
+
+            press(cx, "tab");
+            assert!(in_view(cx, 22), "Tab reached the active item");
+            press(cx, "down");
+            assert!(in_view(cx, 23));
+        }
+
+        #[gpui::test]
+        fn focus_that_is_in_view_does_not_scroll(cx: &mut TestAppContext) {
+            let cx = open(cx);
+            let before = item(cx, 0).unwrap();
+            press(cx, "down down");
+            assert!(in_view(cx, 2));
+            assert_eq!(
+                item(cx, 0),
+                Some(before),
+                "the items stayed where they were"
+            );
+
+            // Far down, moving back up inside the view scrolls nothing either.
+            press(cx, "end");
+            let at_end = item(cx, 28).unwrap();
+            press(cx, "up");
+            assert_eq!(item(cx, 28), Some(at_end));
+        }
+
+        #[gpui::test]
+        fn scrolling_by_hand_is_left_alone_while_focus_stays_put(cx: &mut TestAppContext) {
+            let cx = open(cx);
+            press(cx, "end");
+            assert!(in_view(cx, 29));
+
+            // The wheel takes the list back to the top. Focus is still on the
+            // last item, which is out of view, and stays there.
+            cx.simulate_event(ScrollWheelEvent {
+                position: point(px(100.), px(100.)),
+                delta: ScrollDelta::Pixels(point(px(0.), px(5000.))),
+                ..Default::default()
+            });
+            draw(cx);
+            assert!(in_view(cx, 0), "the wheel scrolled to the top");
+            assert!(!in_view(cx, 29));
+            draw(cx);
+            assert!(
+                in_view(cx, 0),
+                "later frames don't pull the list back to the focus"
+            );
+
+            // A key press moves focus again, and that scrolls to the new item.
+            press(cx, "up");
+            assert!(in_view(cx, 28));
+        }
     }
 }

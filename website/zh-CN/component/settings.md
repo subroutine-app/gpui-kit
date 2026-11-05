@@ -13,6 +13,8 @@ Settings 组件用于构建应用设置界面，支持页面分组、按标题/�
 
 ```rust
 use gpui_kit::component::setting::{Settings, SettingPage, SettingGroup, SettingItem, SettingField};
+// 由应用自行管理布局时使用的构件：
+use gpui_kit::component::setting::{SettingList, SettingRow, SettingSection};
 ```
 
 ## 用法
@@ -23,8 +25,8 @@ use gpui_kit::component::setting::{Settings, SettingPage, SettingGroup, SettingI
 
 - [Settings]：顶层设置容器，持有多个设置页面。
 - [SettingPage]：一组相关设置的页面。
-- [SettingGroup]：基于 [GroupBox] 风格的设置分组。
-- [SettingItem]：单个设置项，包含标题、描述和字段。
+- [SettingGroup]：设置分组，渲染为一个 [SettingSection]。
+- [SettingItem]：单个设置项，包含标题、描述和字段，渲染为一个 [SettingRow]。
 - [SettingField]：具体字段，如 Input、Dropdown、Switch 等。
 
 整体层级如下：
@@ -32,12 +34,15 @@ use gpui_kit::component::setting::{Settings, SettingPage, SettingGroup, SettingI
 ```
 Settings
   SettingPage
-    SettingGroup
-      SettingItem
-        Title
-        Description (optional)
-        SettingField
+    SettingGroup          -> SettingSection：标题和描述位于表面上方
+      SettingItem         -> SettingRow，与相邻项之间以细线分隔
+        Title（info 图标）
+        Description（可选，位于标题下方）
+        SettingField      -> 行尾控件
 ```
+
+当应用自行管理页面布局和导航时，也可以单独使用 [SettingRow]、[SettingSection]
+和 [SettingList]，见[构件](#构件)。
 
 ### 基础示例
 
@@ -91,7 +96,19 @@ Settings::new("app-settings")
 清空搜索会保留当前页面，不会恢复搜索前的选择。
 没有匹配结果时不显示页面内容，并暂存选择，供结果恢复时使用。
 
+### 窄宽度布局
+
+当 Settings 的宽度小于 480 px 时，搜索框和页面选择器会取代侧边栏，显示在当前页面上方，所有设置项也改用纵向布局。
+选择器只列出与搜索匹配的页面，选中某一项即打开对应页面。按 Tab 键可从搜索框移到选择器，再进入页面内容。
+宽度恢复后，侧边栏重新出现，并保持当前选中的页面。
+
 ### 分组样式
+
+分组样式决定设置项所在的表面。设置项之间始终以细线分隔，分组的标题和描述位于表面上方：
+
+- `GroupBoxVariant::Normal`（默认）：没有表面，设置行直接位于页面上。
+- `GroupBoxVariant::Outline`：带边框的卡片。
+- `GroupBoxVariant::Fill`：使用 `group_box` 颜色填充、带边框的卡片。
 
 ```rust
 use gpui_kit::component::group_box::GroupBoxVariant;
@@ -215,6 +232,22 @@ SettingGroup::new()
     .footer(|_, _| "Changes apply to this device only.")
 ```
 
+### 缓存独立分组
+
+为分组传入 `SettingGroup::key(u64)` 后，在 key 改变之前会复用该分组的布局与绘制结果。
+key 应由所有会影响分组内容、样式或回调的应用数据得出，例如修订计数或哈希值。
+`Input` 等基于 Entity 的控件在其状态通知时仍会自行重绘；搜索、可用宽度、尺寸、分组样式和主题的变化也会自动刷新受影响的分组。
+
+```rust
+SettingGroup::new()
+    .key(preferences_revision)
+    .title("Editing")
+    .items(editing_items)
+```
+
+key 表示修订版本，而不是身份标识：分组移动或被替换时，需要同时更改相应位置的 key。
+未设置 key 的分组仍像以前一样随页面一起渲染。编辑过程中请保持页面和分组顺序稳定，以便控件保留自身状态。
+
 ## Setting Item
 
 ### 基础设置项
@@ -222,6 +255,18 @@ SettingGroup::new()
 ```rust
 SettingItem::new("Title", SettingField::switch(...))
     .description("Description text")
+```
+
+描述以较小的 muted 文本显示在标题下方。当一行的宽度不足以并排放下标题和字段时，字段会换到标题下方。
+
+### Info
+
+用 `info` 提供大多数人不必每次阅读的补充说明。它会在标题旁渲染一个 info 图标，并在 tooltip 中显示说明文字；该图标可以通过键盘聚焦，说明文字即其无障碍标签。info 文字也参与搜索。用户做出选择所必需的信息应放在描述中。
+
+```rust
+SettingItem::new("Telemetry", SettingField::switch(...))
+    .description("Send anonymous usage counts.")
+    .info("File contents and names are never included.")
 ```
 
 ### 使用 render closure 的自定义项
@@ -322,6 +367,86 @@ SettingItem::render(|options, _, _| {
 .keywords(["Advanced", "Network"])
 ```
 
+## 构件
+
+[Settings] 管理一个完整的页面：侧栏、搜索和滚动列表。当应用自行管理页面布局、导航和搜索框时，可以用它的组成部分构建同样的外观。这些构件不持有状态：所有值和控件都由应用持有，并在每次渲染时传入。
+
+- [SettingRow]：标签及其下方的描述、可选的 info 图标，以及行尾的控件或值。
+- [SettingSection]：带标题的一组设置行，位于同一表面上并以细线分隔，可带底部说明。
+- [SettingList]：按应用持有的搜索词过滤的一组分区。
+
+```rust
+use gpui_kit::component::{
+    group_box::GroupBoxVariants as _,
+    setting::{SettingList, SettingRow, SettingSection},
+    select::Select,
+    switch::Switch,
+};
+
+let general = SettingSection::new("general")
+    .title("General")
+    .description("How the application starts and behaves.")
+    .fill()
+    .row(
+        SettingRow::new("launch-at-login", "Open at login")
+            .description("Start in the background when you sign in.")
+            .switch(
+                Switch::new("launch-at-login-switch")
+                    .checked(launch_at_login)
+                    .on_click(|checked, _, cx| { /* 保存 `*checked` */ }),
+            ),
+    )
+    .row(
+        SettingRow::new("density", "Density")
+            .info("Compact fits more rows on screen.")
+            .keywords(["comfortable", "compact"])
+            .control(Select::new(&density_state).w(rems(10.))),
+    )
+    .row(SettingRow::new("version", "Version").value("0.9.0"));
+
+SettingList::new("settings-list")
+    .query(search_input.read(cx).value())
+    .sections([general]);
+```
+
+### Setting Row
+
+- `control(element)`：在行尾放置任意元素，例如 `Select`、`Button`、`Input` 或自定义组合控件。
+- `switch(switch)`：放置一个 `Switch`，并以该行的标签为其命名。
+- `value(text)`：当该行没有控件时，在行尾以 muted 文本显示值，例如状态。
+- `layout(Axis::Vertical)`：始终把全宽控件放在标签下方。
+- `label_width(width)`：设置标签列的最小宽度（默认 `7.5rem`）；当一行窄于该宽度加上控件宽度时，控件换到标签下方。分区的 `label_width` 作用于未自行设置宽度的设置行。
+
+禁用的设置行会变暗。通过 `switch` 传入的 Switch 会随之禁用。设置行不会干预通过 `control` 传入的控件，因此请同时传入已禁用、且不注册操作处理函数的控件：
+
+```rust
+SettingRow::new("sync-now", "Sync now")
+    .disabled(!sync_enabled)
+    .control(
+        Button::new("sync-now-button")
+            .label("Sync Now")
+            .disabled(!sync_enabled)
+            .when(sync_enabled, |this| this.on_click(|_, _, cx| { /* 同步 */ })),
+    )
+```
+
+### Setting Section
+
+分区的表面遵循其 [GroupBox] 样式，可通过 `normal()`、`outline()`、`fill()` 或 `with_variant(...)` 设置，默认为 `Normal`。通过 `child` 添加的子元素是位于设置行之间的全宽块，按调用顺序排列，并使用相同的内边距和分隔线：
+
+```rust
+SettingSection::new("data")
+    .title("Data")
+    .outline()
+    .row(SettingRow::new("cache", "Offline data").control(remove_button))
+    .child(confirmation_panel)
+    .footer("Synced data stays in your account.")
+```
+
+### Setting List
+
+[SettingList] 以不区分大小写的方式，将搜索词与分区的标题和描述，以及设置行的标签、描述、info、值和关键词进行匹配。标题或描述匹配的分区保留其全部内容；否则只保留匹配的设置行，块会被移除，因为其内容无法被搜索。顺序保持不变。可用 `empty(element)` 替换默认的无结果状态。
+
 ## Setting Fields
 
 [SettingField] 枚举提供了多种常见字段类型。
@@ -374,6 +499,8 @@ SettingItem::new(
 ```
 
 ### Dropdown
+
+选项文字超出整行宽度时会以省略号截断，菜单中仍完整显示。
 
 ```rust
 SettingItem::new(
@@ -479,6 +606,9 @@ SettingItem::new(
 - [SettingGroup]
 - [SettingItem]
 - [SettingField]
+- [SettingSection]
+- [SettingRow]
+- [SettingList]
 - [NumberFieldOptions]
 
 ### 尺寸
@@ -586,5 +716,8 @@ Settings::new("app-settings")
 [SettingField]: https://docs.rs/gpui-component/latest/gpui_component/setting/enum.SettingField.html
 [SettingFieldElement]: https://docs.rs/gpui-component/latest/gpui_component/setting/trait.SettingFieldElement.html
 [NumberFieldOptions]: https://docs.rs/gpui-component/latest/gpui_component/setting/struct.NumberFieldOptions.html
+[SettingSection]: https://docs.rs/gpui-component/latest/gpui_component/setting/struct.SettingSection.html
+[SettingRow]: https://docs.rs/gpui-component/latest/gpui_component/setting/struct.SettingRow.html
+[SettingList]: https://docs.rs/gpui-component/latest/gpui_component/setting/struct.SettingList.html
 [GroupBox]: ./group-box.md
 [Sizable]: https://docs.rs/gpui-component/latest/gpui_component/trait.Sizable.html

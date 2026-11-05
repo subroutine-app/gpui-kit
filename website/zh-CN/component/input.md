@@ -217,6 +217,21 @@ Input::new(&input).context_menu(|menu, window, cx| {
 })
 ```
 
+在 macOS 和 Windows 上，菜单由操作系统绘制。在 `Input`、`Textarea` 或 `Editor` 上调用 `context_menu_style(ContextMenuStyle::Drawn)`，会改为显示 GPUI 按主题颜色绘制的菜单，与 Linux 上一致。
+
+如果要让应用中的所有文本输入框使用同一种样式，在启动时设置一次即可。它也会作用于其他组件自行创建的输入框，例如 Settings 或可搜索 Select 的搜索框，以及可选择文字的菜单。
+
+```rust
+use gpui_kit::component::input::ContextMenuStyle;
+
+gpui_kit::init(cx);
+ContextMenuStyle::set_app_default(ContextMenuStyle::Drawn, cx);
+```
+
+输入框自己设置的 `context_menu_style` 仍然优先。菜单在打开时才读取默认样式，因此之后修改也会作用于所有输入框。
+
+在选区上右键，或在选区末尾之后右键，选区会保留，菜单中的复制、剪切和粘贴都作用于它。在其他位置右键时，光标会先移到那里。按 Shift-F10 或 Menu 键会在光标处打开同一个菜单，并保留选区；输入框被禁用或关闭了上下文菜单时，这两个键会继续传给外层元素。也可以把其他按键绑定到 `input::ShowContextMenu` 来打开它。
+
 ### 触摸选择
 
 在触摸屏上，长按会选中手指下的单词，手指按住不放时选区跟随手指移动。抬起手指后，选区上方会出现编辑菜单，列出当前可用的命令——`剪切`、`复制`、`粘贴` 和 `全选`——并在选区两端各显示一个拖动 handle。拖动 handle 会移动对应的一端，另一端保持不动；多行输入框在手指到达边缘时会自动滚动。长按空白处或空输入框时会放置光标，菜单只提供 `粘贴` 和 `全选`。
@@ -254,6 +269,36 @@ Textarea::new(&self.composer).on_paste(move |item, _, cx| {
 
 已知限制：在 web 上 `read_from_clipboard()` 为 `None`（文本经由平台输入处理器到达）；那里的图片粘贴需要异步剪贴板访问和权限，不在本次范围内。
 
+由平台直接送达的粘贴（例如浏览器的 paste 事件）与 `Paste` action 的插入方式相同：作为一个撤销步骤；单行输入框会去掉换行；多行输入框的光标数与剪贴板行数相同时，每个光标各插入一行。
+
+### 焦点
+
+Input、Textarea、NumberInput、OTP 单元格、InputGroup 和时间字段获得焦点时，会把 1 px 边框染成主题的 `ring` 颜色，边框之外不再绘制任何内容，因此位于滚动区域或裁剪容器中的输入框也能完整显示焦点。按钮等其他控件仍保留 focus ring。通过 `FocusableExt` 调用 `.focus_ring(false)` 可让边框保持原样。
+
+### 平滑光标
+
+开启平滑光标后，光标会沿所在行滑动到目标位置，而不是直接跳过去。输入的字符在光标经过时才显示出来，Backspace 时光标滑回并盖住删除的字符。方向键和按词移动同样会滑动；其他移动以及换到另一行的移动都会立即完成。默认关闭。
+
+```rust
+use std::time::Duration;
+use gpui_kit::component::input::{InputState, SmoothCaretOptions, set_app_smooth_caret};
+
+// 对所有未自行设置的 Input、Textarea 和 Editor 生效，
+// 包括其他组件内部的输入框，例如可搜索 Select 的过滤框。
+set_app_smooth_caret(true, cx);
+
+// 单个输入框自己的设置优先于应用级设置。
+let input = cx.new(|cx| {
+    InputState::new(window, cx)
+        .smooth_caret(true)
+        .smooth_caret_options(
+            SmoothCaretOptions::default().typing_duration(Duration::from_millis(80)),
+        )
+});
+```
+
+已显示的输入框会立即跟随 `set_app_smooth_caret` 的变化，因此可以在设置项改变时随时调用。动画只影响绘制：值、选区和撤销历史都会立即改变。默认每次按键在 100 ms 内落定。系统要求减弱动态效果时，光标会立即移动；密码输入框、从右到左的文字、多光标或有选区时，以及显示行内补全时也是如此。右对齐和居中对齐的输入框中，输入会同时移动光标之前的文字，因此输入的字符会立即显示，方向键仍然滑动。
+
 ### 光标闪烁
 
 获得焦点的输入框中，光标每 500 ms 闪烁一次。设置 `Theme::cursor_blink` 可修改应用中所有 Input、Textarea、Editor 和 OTP 输入框的光标策略，已获得焦点的输入框也会立即生效：
@@ -271,7 +316,7 @@ Theme::update(cx, |theme| {
 Theme::update(cx, |theme| theme.cursor_blink = CursorBlink::steady());
 ```
 
-`Theme::update` 会把策略同步到 Base，因此切换主题或明暗模式后策略依然保留。计时规则见 [Base Input](../base/primitives/input.md#光标闪烁)。
+`Theme::update` 会把策略同步到 Base，因此切换主题或明暗模式后策略依然保留。计时规则见 [Base Input](../base/primitives/input.md#光标闪烁)。窗口失去激活时，其中的光标既不显示也不闪烁；窗口重新激活后恢复。
 
 ## 示例
 

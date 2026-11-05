@@ -6,12 +6,13 @@ use std::{
 };
 
 use gpui::{
-    AnyElement, App, Axis, Bounds, DefiniteLength, Div, Element, ElementId, FontStyle, FontWeight,
-    GlobalElementId, HighlightStyle, Hsla, Image, ImageFormat, ImageSource, InspectorElementId,
-    InteractiveElement as _, IntoElement, IsZero as _, LayoutId, ObjectFit, Overflow,
-    ParentElement, Pixels, Point, Refineable as _, Rems, ScrollHandle, SharedString, SharedUri,
-    StatefulInteractiveElement, StyleRefinement, Styled, StyledImage as _, TextStyleRefinement,
-    WhiteSpace, Window, div, img, prelude::FluentBuilder as _, px, relative, rems,
+    AnyElement, App, Axis, Bounds, DefiniteLength, Div, Element, ElementId, FontFeatures,
+    FontStyle, FontWeight, GlobalElementId, HighlightStyle, Hsla, Image, ImageFormat, ImageSource,
+    InspectorElementId, InteractiveElement as _, IntoElement, IsZero as _, LayoutId, ObjectFit,
+    Overflow, ParentElement, Pixels, Point, Refineable as _, Rems, ScrollHandle, SharedString,
+    SharedUri, StatefulInteractiveElement, StyleRefinement, Styled, StyledImage as _,
+    TextStyleRefinement, WhiteSpace, Window, div, img, prelude::FluentBuilder as _, px, relative,
+    rems,
 };
 use markdown::mdast;
 
@@ -27,7 +28,7 @@ use crate::{
             foreground_highlights, point_in_text_selection, text_runs, text_size_ranges,
         },
         inline_flow::{InlineFlow, InlineFlowItem, slice_ranges},
-        range_highlight::{RangeHighlightFrame, RevealAt, RevealRequest},
+        range_highlight::{HighlightPaint, RangeHighlightFrame, RevealAt, RevealRequest},
         stream_fade::{StreamFadeFrame, TextLeafKey},
         text_view::handle_link_click,
     },
@@ -1590,6 +1591,7 @@ impl std::fmt::Debug for ParagraphRenderCache {
 struct ParagraphRender {
     style: Arc<TextViewStyle>,
     mono_font: SharedString,
+    mono_features: FontFeatures,
     background: Hsla,
     text: SharedString,
     highlights: Vec<(Range<usize>, InlineHighlight)>,
@@ -1627,12 +1629,15 @@ impl Paragraph {
         Vec<(Range<usize>, InlineHighlight)>,
         Vec<(Range<usize>, LinkMark)>,
     ) {
-        let mono_font = cx.theme().tokens.typography.mono.clone();
+        let typography = &cx.theme().tokens.typography;
+        let mono_font = typography.mono.clone();
+        let mono_features = typography.mono_features.clone();
         let background = cx.theme().tokens.colors.background;
         if let Ok(cache) = self.render_cache.0.lock()
             && let Some(cached) = cache.as_ref()
             && (Arc::ptr_eq(&cached.style, &node_cx.style) || *cached.style == *node_cx.style)
             && cached.mono_font == mono_font
+            && cached.mono_features == mono_features
             && cached.background == background
         {
             return (
@@ -1673,6 +1678,7 @@ impl Paragraph {
             *cache = Some(Arc::new(ParagraphRender {
                 style: node_cx.style.clone(),
                 mono_font,
+                mono_features,
                 background,
                 text: text.clone(),
                 highlights: highlights.clone(),
@@ -2044,6 +2050,7 @@ struct TableColumnWidths {
     text_styles: TableTextStyles,
     rem_size: Pixels,
     mono_family: SharedString,
+    mono_features: FontFeatures,
     inline_code: HighlightStyle,
     /// Maxima from ordinary text only. Custom cells may shrink after an update.
     widths: Vec<f32>,
@@ -2583,8 +2590,9 @@ impl CodeBlock {
             .pb(px(14.))
             .bg(style.code_background())
             .border_1()
-            .border_color(style.border())
+            .border_color(style.code_border())
             .font_family(cx.theme().tokens.typography.mono.clone())
+            .font_features(cx.theme().tokens.typography.mono_features.clone())
             .text_size(cx.theme().tokens.typography.mono_md.size)
             .line_height(relative(1.6))
             .relative()
@@ -2606,7 +2614,7 @@ impl CodeBlock {
                     ),
                     node_cx.link_click_handler.clone(),
                 )
-                .range_backgrounds(node_cx.range_backgrounds(leaf_key).to_vec())
+                .range_highlights(node_cx.leaf_range_highlights(leaf_key).to_vec())
                 .reveal(node_cx.reveal_at(leaf_key, 0, self.code().len())),
             );
         let actions = node_cx.code_block_actions.clone().map(|actions| {
@@ -2724,11 +2732,11 @@ impl NodeContext {
         }
     }
 
-    /// The range highlight backgrounds of the text leaf `key`, in its
-    /// rendered byte space.
-    fn range_backgrounds(&self, key: Option<TextLeafKey>) -> &[(Range<usize>, Hsla)] {
+    /// The range highlights of the text leaf `key`, in its rendered byte
+    /// space.
+    fn leaf_range_highlights(&self, key: Option<TextLeafKey>) -> &[(Range<usize>, HighlightPaint)] {
         match (&self.range_highlights, key) {
-            (Some(frame), Some(key)) => frame.backgrounds(key),
+            (Some(frame), Some(key)) => frame.highlights(key),
             _ => &[],
         }
     }
@@ -2826,7 +2834,14 @@ fn mark_highlight(mark: &TextMark, node_cx: &NodeContext, cx: &App) -> InlineHig
         style: highlight,
         font_family,
         font_size_scale: mark.code.then_some(0.875),
-        code_style: mark.code.then(|| node_cx.style.inline_code_style().clone()),
+        code_style: mark.code.then(|| {
+            let mut style = node_cx.style.inline_code_style().clone();
+            style
+                .text
+                .font_features
+                .get_or_insert_with(|| cx.theme().tokens.typography.mono_features.clone());
+            style
+        }),
     }
 }
 
@@ -2870,7 +2885,7 @@ impl Paragraph {
     ) -> AnyElement {
         let children = &self.children;
         let fades = node_cx.stream_fades(fade_key);
-        let backgrounds = node_cx.range_backgrounds(fade_key);
+        let backgrounds = node_cx.leaf_range_highlights(fade_key);
 
         if self.should_render_inline_flow() {
             return InlineFlow::new(
@@ -2900,7 +2915,7 @@ impl Paragraph {
                 }
             }
             let highlights = fade_highlights(highlights, &slice_fades(fades, 0, text.len()));
-            let backgrounds = slice_backgrounds(backgrounds, 0, text.len());
+            let backgrounds = slice_range_highlights(backgrounds, 0, text.len());
             let reveal = node_cx.reveal_at(fade_key, 0, text.len());
             if let Ok(mut state) = self.state.lock() {
                 state.set_text(text);
@@ -2911,7 +2926,7 @@ impl Paragraph {
                 highlights,
                 node_cx.link_click_handler.clone(),
             )
-            .range_backgrounds(backgrounds)
+            .range_highlights(backgrounds)
             .reveal(reveal)
             .into_any_element();
         }
@@ -2945,7 +2960,7 @@ impl Paragraph {
                             ),
                             node_cx.link_click_handler.clone(),
                         )
-                        .range_backgrounds(slice_backgrounds(
+                        .range_highlights(slice_range_highlights(
                             backgrounds,
                             consumed,
                             consumed + text.len(),
@@ -3039,7 +3054,7 @@ impl Paragraph {
                     highlights,
                     node_cx.link_click_handler.clone(),
                 )
-                .range_backgrounds(slice_backgrounds(backgrounds, consumed, text_end))
+                .range_highlights(slice_range_highlights(backgrounds, consumed, text_end))
                 .reveal(node_cx.reveal_at(fade_key, consumed, text_end))
                 .into_any_element(),
             );
@@ -3103,7 +3118,7 @@ impl Paragraph {
         &self,
         leaf_key: Option<TextLeafKey>,
         fades: &[(Range<usize>, f32)],
-        backgrounds: &[(Range<usize>, Hsla)],
+        backgrounds: &[(Range<usize>, HighlightPaint)],
         node_cx: &NodeContext,
         cx: &mut App,
     ) -> Vec<InlineFlowItem> {
@@ -3124,7 +3139,7 @@ impl Paragraph {
                 if !text.is_empty() {
                     let item_fades = slice_fades(fades, consumed, consumed + text.len());
                     let item_backgrounds =
-                        slice_backgrounds(backgrounds, consumed, consumed + text.len());
+                        slice_range_highlights(backgrounds, consumed, consumed + text.len());
                     let item_reveal = node_cx.reveal_at(leaf_key, consumed, consumed + text.len());
                     consumed += text.len();
                     items.push(InlineFlowItem::Text {
@@ -3132,7 +3147,7 @@ impl Paragraph {
                         text: std::mem::take(&mut text).into(),
                         links: std::mem::take(&mut links),
                         highlights: fade_highlights(std::mem::take(&mut highlights), &item_fades),
-                        backgrounds: item_backgrounds,
+                        range_highlights: item_backgrounds,
                         reveal: item_reveal,
                     });
                 }
@@ -3185,7 +3200,7 @@ impl Paragraph {
                             highlights.clone(),
                             &slice_fades(fades, consumed, consumed + text.len()),
                         ),
-                        backgrounds: slice_backgrounds(
+                        range_highlights: slice_range_highlights(
                             backgrounds,
                             consumed,
                             consumed + text.len(),
@@ -3242,14 +3257,14 @@ impl Paragraph {
                 highlights,
                 &slice_fades(fades, consumed, consumed + text.len()),
             );
-            let backgrounds = slice_backgrounds(backgrounds, consumed, consumed + text.len());
+            let backgrounds = slice_range_highlights(backgrounds, consumed, consumed + text.len());
             let reveal = node_cx.reveal_at(leaf_key, consumed, consumed + text.len());
             items.push(InlineFlowItem::Text {
                 state: self.state.clone(),
                 text: text.into(),
                 links,
                 highlights,
-                backgrounds,
+                range_highlights: backgrounds,
                 reveal,
             });
         }
@@ -3381,14 +3396,14 @@ fn slice_fades(
     slice_ranges(fades, start, end, |range, fade_out| (range, *fade_out))
 }
 
-/// The range highlight backgrounds overlapping `start..end`, rebased to
-/// start at `start`.
-fn slice_backgrounds(
-    backgrounds: &[(Range<usize>, Hsla)],
+/// The range highlights overlapping `start..end`, rebased to start at
+/// `start`.
+fn slice_range_highlights(
+    range_highlights: &[(Range<usize>, HighlightPaint)],
     start: usize,
     end: usize,
-) -> Vec<(Range<usize>, Hsla)> {
-    slice_ranges(backgrounds, start, end, |range, color| (range, *color))
+) -> Vec<(Range<usize>, HighlightPaint)> {
+    slice_ranges(range_highlights, start, end, |range, paint| (range, *paint))
 }
 
 /// A table column's cell widths for layout, excluding the divider after it.
@@ -3429,6 +3444,7 @@ fn measure_table_columns(
     let text_styles = TableTextStyles::new(&node_cx.style, window);
     let rem_size = window.rem_size();
     let mono_family = cx.theme().tokens.typography.mono.clone();
+    let mono_features = cx.theme().tokens.typography.mono_features.clone();
     let inline_code = node_cx.style.inline_code_highlight();
     let cached = table.column_widths_cache.0.lock().ok().and_then(|cache| {
         cache
@@ -3438,6 +3454,7 @@ fn measure_table_columns(
                     && cached.text_styles == text_styles
                     && cached.rem_size == rem_size
                     && cached.mono_family == mono_family
+                    && cached.mono_features == mono_features
                     && cached.inline_code == inline_code
                     && cached.text_system == text_system_id(window)
             })
@@ -3451,6 +3468,7 @@ fn measure_table_columns(
             text_styles: text_styles.clone(),
             rem_size,
             mono_family,
+            mono_features,
             inline_code,
             widths,
             custom_cells,
@@ -4154,7 +4172,7 @@ impl BlockNode {
     fn table_row_corner_radii(style: &TextViewStyle, window: &Window) -> [Option<Pixels>; 4] {
         let rem_size = window.rem_size();
         let inset = |radius: Option<gpui::AbsoluteLength>| {
-            radius.map(|radius| (radius.to_pixels(rem_size) - px(1.)).max(px(0.)))
+            radius.map(|radius| crate::concentric_radius(radius.to_pixels(rem_size), px(1.)))
         };
         let radii = &style.table().corner_radii;
         [
@@ -4527,6 +4545,51 @@ impl BlockNode {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Inline code is shaped with the theme's code font features, also under
+    /// a bold mark, the prose around it keeps the body's, and a change of
+    /// features reaches a paragraph rendered before it.
+    #[test]
+    fn inline_code_is_shaped_with_the_code_font_features() {
+        use crate::text::inline::text_runs;
+
+        let mut app = gpui::TestApp::new();
+        let mut window = app.open_window(|_, _| gpui::Empty);
+        window.update(|_, _, cx| {
+            cx.set_global(crate::Theme::default());
+            let body = FontFeatures(Arc::new(vec![("ss01".into(), 1)]));
+            let no_ligatures = FontFeatures(Arc::new(vec![("calt".into(), 0), ("liga".into(), 0)]));
+            let text_style = gpui::TextStyle {
+                font_features: body.clone(),
+                ..Default::default()
+            };
+            let mut paragraph = Paragraph::default();
+            paragraph.push(InlineNode::new("if a != b {}").marks(vec![
+                (3..9, TextMark::default().code()),
+                (6..12, TextMark::default().bold()),
+            ]));
+            let features = |cx: &mut App| {
+                let (text, highlights, _) = paragraph.plain_render(&NodeContext::default(), cx);
+                text_runs(text.len(), &text_style, &highlights)
+                    .into_iter()
+                    .map(|run| (run.len, run.font.features))
+                    .collect::<Vec<_>>()
+            };
+
+            let defaults = features(cx);
+            crate::Theme::global_mut(cx).tokens.typography.mono_features = no_ligatures.clone();
+            assert_eq!(
+                features(cx),
+                vec![
+                    (3, body.clone()),
+                    (3, no_ligatures.clone()),
+                    (3, no_ligatures),
+                    (3, body.clone()),
+                ]
+            );
+            assert_eq!(defaults[1], (3, FontFeatures::default()));
+        });
+    }
 
     #[test]
     fn host_foregrounds_follow_the_render_context_without_entering_the_paragraph_cache() {

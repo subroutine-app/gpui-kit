@@ -37,6 +37,30 @@ div()
     })
 ```
 
+### ContextMenuLayer
+
+When a view opens a menu from code — from a press it handles itself, a toolbar
+button or a keyboard command — mount a `ContextMenuLayer` once and open menus
+at a window position through it:
+
+```rust
+use gpui_kit::component::menu::{ContextMenuLayer, PopupMenuItem};
+
+let layer = cx.new(|_| ContextMenuLayer::new());
+
+// In the view's render: `.child(layer.clone())`. Later, from a handler:
+layer.update(cx, |layer, cx| {
+    layer.open(event.position, window, cx, |menu, _, _| {
+        menu.item(PopupMenuItem::new("Rename").on_click(|_, window, cx| rename(window, cx)))
+    })
+});
+```
+
+The menu takes focus, restores the previous focus when it closes, and replaces
+any menu the layer is showing. `is_open`, `contains` and `contains_focus` let
+the view ignore pointer and keyboard input aimed at the open menu, and the
+layer emits `DismissEvent` when its menu closes.
+
 ### DropdownMenu
 
 Dropdown menus are triggered by buttons or other interactive elements:
@@ -89,6 +113,18 @@ Button::new("menu-btn")
     })
 ```
 
+The dropdown's own style applies to the container the trigger is laid out in.
+A trigger sized relative to its parent needs the same size there, so a button
+whose long label should truncate inside its slot takes `max_w_full` on both:
+
+```rust
+Button::new("model")
+    .label(long_label)
+    .max_w_full()
+    .dropdown_menu(|menu, window, cx| menu.menu("Option 1", Box::new(Action1)))
+    .max_w_full()
+```
+
 ### Icons
 
 Add icons to menu items for better visual clarity:
@@ -135,6 +171,17 @@ There also have a `check_side` option for you to config the check icon to be sho
 ```rust
 menu.check_size(Side::Right)
     .menu_with_check("Enable Feature", is_enabled, Box::new(ToggleFeature))
+```
+
+An item with its own click handler is added with `checkable_item`, so it
+reports its check state to assistive technology even while unchecked:
+
+```rust
+menu.checkable_item(
+    PopupMenuItem::new("Show Sidebar")
+        .checked(sidebar_visible)
+        .on_click(|_, window, cx| toggle_sidebar(window, cx)),
+)
 ```
 
 ### Separators
@@ -466,6 +513,7 @@ Button::new("settings")
 | `Enter` / `Space` | Activate menu item                |
 | `Escape`          | Close menu                        |
 | `Tab`             | Close menu and focus next element |
+| A letter or digit | Select the next item it starts    |
 
 ## Best Practices
 

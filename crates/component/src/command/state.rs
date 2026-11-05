@@ -21,6 +21,7 @@ use crate::{
     h_flex,
     input::{Input, InputEvent, InputState},
     kbd::Kbd,
+    nested_radius,
     scroll::Scrollbar,
     v_flex, v_virtual_list,
 };
@@ -126,7 +127,7 @@ pub struct CommandState {
     /// The keybinding hint each matched item showed when the rows were last
     /// measured. Hints are looked up on every render, so a keymap change can
     /// resize a row while the model stays the same.
-    measured_bindings: Vec<Option<Keystroke>>,
+    measured_bindings: Vec<Option<Vec<Keystroke>>>,
     matched: Vec<MatchedItem>,
     selected_index: Option<usize>,
     preserve_no_selection: bool,
@@ -663,7 +664,8 @@ impl CommandState {
                     CommandRow::Heading(_) => self.render_row(row_ix, window, cx),
                     CommandRow::Item(matched_ix) => {
                         let binding = self.item_binding(*matched_ix, window, cx);
-                        bindings[*matched_ix] = binding.as_ref().map(|kbd| kbd.keystroke().clone());
+                        bindings[*matched_ix] =
+                            binding.as_ref().map(|kbd| kbd.keystrokes().to_vec());
                         self.render_item_with_binding(*matched_ix, binding, window, cx)
                     }
                 };
@@ -700,7 +702,7 @@ impl CommandState {
         });
     }
 
-    /// Row corner radius, concentric with the frame: the list's `p_1` (plus the
+    /// Row corner radius, following the frame: the list's `p_1` (plus the
     /// border when bordered) sits between a row and the frame's corner. A
     /// borderless command without its own radius keeps the theme radius, since
     /// its frame belongs to the host.
@@ -716,7 +718,7 @@ impl CommandState {
             (false, Some(radius)) => (radius.to_pixels(rem_size), px(0.)),
             (false, None) => return theme.radius,
         };
-        (outer - rem_size * 0.25 - border).max(px(0.))
+        nested_radius(outer, rem_size * 0.25 + border)
     }
 
     /// The frame every item row shares, so that the measured height matches the
@@ -780,8 +782,8 @@ impl CommandState {
         let measured = self
             .measured_bindings
             .get(matched_ix)
-            .and_then(Option::as_ref);
-        if !self.needs_measure && measured != binding.as_ref().map(Kbd::keystroke) {
+            .and_then(Option::as_deref);
+        if !self.needs_measure && measured != binding.as_ref().map(Kbd::keystrokes) {
             self.measure_on_next_frame(window, cx);
         }
 

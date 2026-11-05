@@ -2,7 +2,7 @@ use crate::input::{DisplayMap, FoldRange, InputExtras as _, InputModeKind, Overv
 use gpui::Corners;
 use gpui::Half;
 use gpui::{
-    AnyElement, App, Bounds, Edges, Element, ElementId, ElementInputHandler, Entity,
+    AnyElement, App, Bounds, ContentMask, Edges, Element, ElementId, ElementInputHandler, Entity,
     GlobalElementId,
 };
 use gpui::{
@@ -25,6 +25,7 @@ use super::{
     InputBaseState, PrepaintCaretGeometry, RangeDecorationStyle, TextDecoration,
     layout::{LastLayout, WhitespaceIndicators},
     mode::LayoutMode,
+    smooth_caret::{CaretFrame, CaretPlan},
     tab_stops::{expand_tabs, expanded_width, tab_stop_width},
 };
 
@@ -420,6 +421,20 @@ fn editor_gutter_bounds(
             input_bounds.size.height + ghost_lines_height + paddings.top + paddings.bottom,
         ),
     }
+}
+
+/// The line between the gutter and the text, over the gutter's full height.
+/// It is one pixel wide, rounded to whole device pixels the way borders are,
+/// and sits on a device pixel in the middle of the margin before the text, so
+/// it stays crisp at fractional scale factors.
+fn gutter_separator_bounds(gutter_bounds: Bounds<Pixels>, window: &Window) -> Bounds<Pixels> {
+    let device_pixel = px(1. / window.scale_factor());
+    let width = window.pixel_snap(px(1.)).max(device_pixel);
+    let left = window.pixel_snap(gutter_bounds.right() - LINE_NUMBER_RIGHT_MARGIN.half());
+    Bounds::new(
+        point(left, gutter_bounds.top()),
+        size(width, gutter_bounds.size.height),
+    )
 }
 
 /// Where a gutter or overview ruler decoration sits, in display rows.
@@ -2817,6 +2832,8 @@ pub(super) struct PrepaintState {
     /// First line of inline completion (painted after cursor on same line)
     ghost_first_line: Option<ShapedLine>,
     ghost_lines_height: Pixels,
+    /// The smooth caret's glide, when one is in progress.
+    caret_frame: CaretFrame,
 }
 
 impl PrepaintState {
@@ -3416,6 +3433,16 @@ impl<M: InputModeKind> Element for TextElement<M> {
             .iter()
             .find(|info| info.is_active)
             .map(|info| info.bounds);
+        // The smooth caret draws the caret behind where it is while it glides
+        // there. Menus, scrolling and the input method keep using the caret.
+        let text_x = bounds.origin.x + last_layout.line_number_width;
+        // Right-aligned text keeps the caret inside the viewport edge, as
+        // `layout_cursors` keeps it where it is.
+        let caret_edge = (last_layout.text_align == TextAlign::Right)
+            .then(|| input_bounds.right() - CURSOR_WIDTH);
+        let caret_frame = self.state.update(cx, |state, cx| {
+            state.smooth_caret_frame(&last_layout, text_x, caret_edge, window, cx)
+        });
 
         // Stash the fresh caret geometry for caret-anchored popups. Their
         // deferred prepaint runs after this prepaint but before paint, so
@@ -3464,10 +3491,13 @@ impl<M: InputModeKind> Element for TextElement<M> {
         let state = self.state.read(cx);
         let line_numbers = if state.mode.line_number() {
             let mut line_numbers = Vec::with_capacity(last_layout.visible_buffer_lines.len());
+            let editor_style = &state.editor_style;
             let other_line_runs = vec![TextRun {
                 len: line_number_len,
                 font: style.font(),
-                color: state.editor_style.muted_foreground,
+                color: editor_style
+                    .editor_line_number
+                    .unwrap_or(editor_style.muted_foreground),
                 background_color: None,
                 underline: None,
                 strikethrough: None,
@@ -3475,7 +3505,9 @@ impl<M: InputModeKind> Element for TextElement<M> {
             let current_line_runs = vec![TextRun {
                 len: line_number_len,
                 font: style.font(),
-                color: state.editor_style.foreground,
+                color: editor_style
+                    .editor_active_line_number
+                    .unwrap_or(editor_style.foreground),
                 background_color: None,
                 underline: None,
                 strikethrough: None,
@@ -3586,6 +3618,7 @@ impl<M: InputModeKind> Element for TextElement<M> {
             ghost_first_line,
             ghost_lines,
             ghost_lines_height,
+            caret_frame,
         }
     }
 
@@ -3627,6 +3660,9 @@ impl<M: InputModeKind> Element for TextElement<M> {
         let invisible_top_padding = prepaint.last_layout.visible_top;
         let active_line_color = editor_style
             .editor_active_line
+            .map(|color| if disabled { color.opacity(0.5) } else { color });
+        let gutter_border_color = editor_style
+            .editor_gutter_border
             .map(|color| if disabled { color.opacity(0.5) } else { color });
         let editor_background = if disabled {
             editor_style.background.opacity(0.5)
@@ -3688,14 +3724,32 @@ impl<M: InputModeKind> Element for TextElement<M> {
                 origin.y + offset_y,
             );
 
-            line.paint_background(
-                p,
-                line_height,
-                text_align,
-                Some(prepaint.last_layout.content_width),
-                window,
-                cx,
-            );
+            match prepaint
+                .caret_frame
+                .plan
+                .as_ref()
+                .filter(|plan| plan.buffer_line == buffer_line)
+            {
+                Some(plan) => paint_gliding_line(
+                    line,
+                    p,
+                    plan,
+                    RowLayer::Background,
+                    line_height,
+                    text_align,
+                    Some(prepaint.last_layout.content_width),
+                    window,
+                    cx,
+                ),
+                None => line.paint_background(
+                    p,
+                    line_height,
+                    text_align,
+                    Some(prepaint.last_layout.content_width),
+                    window,
+                    cx,
+                ),
+            }
 
             offset_y += line.size(line_height).height;
 
@@ -3770,14 +3824,32 @@ impl<M: InputModeKind> Element for TextElement<M> {
             );
 
             // Paint the actual line
-            _ = line.paint(
-                p,
-                line_height,
-                text_align,
-                Some(prepaint.last_layout.content_width),
-                window,
-                cx,
-            );
+            match prepaint
+                .caret_frame
+                .plan
+                .as_ref()
+                .filter(|plan| plan.buffer_line == buffer_line)
+            {
+                Some(plan) => paint_gliding_line(
+                    line,
+                    p,
+                    plan,
+                    RowLayer::Glyphs,
+                    line_height,
+                    text_align,
+                    Some(prepaint.last_layout.content_width),
+                    window,
+                    cx,
+                ),
+                None => line.paint(
+                    p,
+                    line_height,
+                    text_align,
+                    Some(prepaint.last_layout.content_width),
+                    window,
+                    cx,
+                ),
+            }
             offset_y += line.size(line_height).height;
 
             if Some(row) == prepaint.current_row {
@@ -3819,13 +3891,24 @@ impl<M: InputModeKind> Element for TextElement<M> {
             element.paint(window, cx);
         }
 
-        // Paint blinking cursors (shared blink state for all carets)
-        if focused && show_cursor {
+        // Paint blinking cursors (shared blink state for all carets). A caret
+        // gliding with the smooth caret stays solid until it arrives.
+        let gliding = prepaint.caret_frame.plan.as_ref();
+        #[cfg(test)]
+        let mut painted_caret = None;
+        if focused && (show_cursor || (gliding.is_some() && !disabled && window.is_window_active()))
+        {
             for cursor_info in prepaint.cursor_infos_with_scroll() {
-                window.paint_quad(fill(
-                    snap_caret_to_device_pixels(cursor_info.bounds, window.scale_factor()),
-                    editor_style.caret,
-                ));
+                let mut bounds =
+                    snap_caret_to_device_pixels(cursor_info.bounds, window.scale_factor());
+                if let Some(plan) = gliding.filter(|_| cursor_info.is_active) {
+                    bounds.origin.x = plan.caret_x;
+                }
+                #[cfg(test)]
+                if cursor_info.is_active {
+                    painted_caret = Some(bounds);
+                }
+                window.paint_quad(fill(bounds, editor_style.caret));
             }
         }
 
@@ -3882,6 +3965,10 @@ impl<M: InputModeKind> Element for TextElement<M> {
                     offset_y += prepaint.ghost_lines_height;
                 }
             }
+
+            if let Some(color) = gutter_border_color {
+                window.paint_quad(fill(gutter_separator_bounds(gutter_bounds, window), color));
+            }
         }
 
         for mark in std::mem::take(&mut prepaint.gutter_decorations) {
@@ -3912,6 +3999,14 @@ impl<M: InputModeKind> Element for TextElement<M> {
             state.scroll_size = prepaint.scroll_size;
             state.update_scroll_offset(Some(prepaint.cursor_scroll_offset), cx);
             state.deferred_scroll_offset = None;
+            // The blink starts over once a glide has ended.
+            if prepaint.caret_frame.ended {
+                state.pause_blink_cursor(cx);
+            }
+            #[cfg(test)]
+            {
+                state.smooth_caret.painted_caret = painted_caret;
+            }
 
             // Layout consumers need changed geometry, not another notification
             // for every paint of an unchanged input.
@@ -3949,6 +4044,82 @@ impl<M: InputModeKind> Element for TextElement<M> {
         }
 
         self.paint_mouse_listeners(&prepaint.hitbox, window, cx);
+    }
+}
+
+/// Which pass of a line [`paint_gliding_line`] paints.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum RowLayer {
+    Background,
+    Glyphs,
+}
+
+/// Paint the line the smooth caret glides on. The caret's row is drawn in
+/// parts: the text before the caret up to where typed text is still hidden,
+/// the text after it moved to follow the caret, and deleted glyphs the caret
+/// has not yet passed back over. The line's other rows are drawn as usual.
+#[allow(clippy::too_many_arguments)]
+fn paint_gliding_line(
+    line: &LineLayout,
+    origin: Point<Pixels>,
+    plan: &CaretPlan,
+    layer: RowLayer,
+    line_height: Pixels,
+    text_align: TextAlign,
+    align_width: Option<Pixels>,
+    window: &mut Window,
+    cx: &mut App,
+) {
+    let paint_row = |line: &LineLayout,
+                     ix: usize,
+                     origin: Point<Pixels>,
+                     window: &mut Window,
+                     cx: &mut App| match layer {
+        RowLayer::Background => {
+            line.paint_row_background(ix, origin, line_height, text_align, align_width, window, cx)
+        }
+        RowLayer::Glyphs => {
+            line.paint_row(ix, origin, line_height, text_align, align_width, window, cx)
+        }
+    };
+    // A mask that lets through the columns from `left` to `right` alone, at
+    // every height: a glyph reaching above or below its row is cut only at
+    // the sides.
+    let columns = |left: Option<Pixels>, right: Option<Pixels>, window: &Window| {
+        let bounds = window.content_mask().bounds;
+        let left = left.map_or(bounds.left(), |left| left.max(bounds.left()));
+        let right = right.map_or(bounds.right(), |right| right.min(bounds.right()));
+        (left < right).then(|| ContentMask {
+            bounds: Bounds::from_corners(point(left, bounds.top()), point(right, bounds.bottom())),
+        })
+    };
+
+    for ix in 0..line.wrapped_lines.len() {
+        if ix != plan.row || !plan.splits_row() {
+            paint_row(line, ix, origin, window, cx);
+            continue;
+        }
+        if let Some(mask) = columns(None, Some(plan.head_end), window) {
+            window.with_content_mask(Some(mask), |window| paint_row(line, ix, origin, window, cx));
+        }
+        if let Some(mask) = columns(Some(plan.tail_start), None, window) {
+            let shifted = origin + point(plan.tail_shift, px(0.));
+            window.with_content_mask(Some(mask), |window| {
+                paint_row(line, ix, shifted, window, cx)
+            });
+        }
+        for ghost in &plan.ghosts {
+            let Some(old) = ghost.lines.get(ghost.line) else {
+                continue;
+            };
+            if let Some(mask) = columns(Some(ghost.visible.start), Some(ghost.visible.end), window)
+            {
+                let shifted = origin + point(ghost.shift, px(0.));
+                window.with_content_mask(Some(mask), |window| {
+                    paint_row(old, ghost.row, shifted, window, cx)
+                });
+            }
+        }
     }
 }
 

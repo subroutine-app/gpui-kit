@@ -1,9 +1,13 @@
-use crate::ThemeStyled as _;
 use crate::actions::{Cancel, Confirm, SelectDown, SelectUp};
 use crate::actions::{SelectLeft, SelectRight};
+use crate::glass::GlassStyled as _;
 use crate::menu::menu_item::MenuItemElement;
+use crate::popover::popup_entrance;
 use crate::scroll::ScrollableElement;
-use crate::{ActiveTheme, ElementExt, Icon, IconName, Sizable as _, h_flex, v_flex};
+use crate::sizing::POPUP_ITEM_INSET;
+use crate::{
+    ActiveTheme, ElementExt, Icon, IconName, Placement, Sizable as _, h_flex, nested_radius, v_flex,
+};
 use crate::{Side, Size, kbd::Kbd};
 use gpui::{
     Action, Anchor, AnyElement, App, AppContext, Bounds, Context, DismissEvent, Edges, Entity,
@@ -11,7 +15,9 @@ use gpui::{
     ParentElement, Pixels, Render, Role, ScrollHandle, SharedString, StatefulInteractiveElement,
     Styled, WeakEntity, Window, anchored, deferred, div, prelude::FluentBuilder, px, rems,
 };
-use gpui::{ClickEvent, Half, MouseDownEvent, OwnedMenuItem, Point, Subscription};
+use gpui::{
+    ClickEvent, KeyDownEvent, Keystroke, MouseDownEvent, OwnedMenuItem, Point, Subscription,
+};
 use gpui_base::TestSupportExt as _;
 
 use std::collections::HashSet;
@@ -278,6 +284,25 @@ impl PopupMenuItem {
             PopupMenuItem::Separator | PopupMenuItem::ElementItem { .. } => None,
         }
     }
+
+    fn starts_with(&self, letter: char) -> bool {
+        self.is_clickable()
+            && self
+                .a11y_label()
+                .and_then(|label| label.chars().next())
+                .is_some_and(|first| first.to_lowercase().eq(letter.to_lowercase()))
+    }
+}
+
+/// The letter a keystroke types for type-select, if it types one on its own.
+fn typed_letter(keystroke: &Keystroke) -> Option<char> {
+    let modifiers = keystroke.modifiers;
+    if modifiers.platform || modifiers.control || modifiers.alt || modifiers.function {
+        return None;
+    }
+    let mut chars = keystroke.key.chars();
+    let letter = chars.next().filter(|letter| letter.is_alphanumeric())?;
+    chars.next().is_none().then_some(letter)
 }
 
 pub struct PopupMenu {
@@ -312,6 +337,10 @@ pub struct PopupMenu {
     scroll_handle: ScrollHandle,
     // This will update on render
     submenu_anchor: (Anchor, Pixels),
+    /// The side of the pointer or trigger the popup hosting this menu opens
+    /// it on, which it slides in from, or `None` for a menu that is not
+    /// opened as a popup. A submenu ignores this and enters from its parent.
+    pub(crate) entrance: Option<Placement>,
 
     /// Paint priority for this menu layer. The top-level menu starts at 1 and
     /// each nested submenu increments it, so deeper levels are always drawn on
@@ -355,6 +384,7 @@ impl PopupMenu {
             external_link_icon: true,
             size: Size::default(),
             submenu_anchor: (Anchor::TopLeft, Pixels::ZERO),
+            entrance: None,
             priority: gpui_base::POPUP_PRIORITY,
             _subscriptions: vec![],
         }
@@ -588,6 +618,15 @@ impl PopupMenu {
     ) -> Self {
         self.checkable.insert(self.menu_items.len());
         self.add_menu_item(label, None, action, disabled, checked);
+        self
+    }
+
+    /// Add an item that can be checked, so it reports its check state to
+    /// assistive technology even while unchecked, and keeps its own click
+    /// handler, action and shortcut hint.
+    pub fn checkable_item(mut self, item: impl Into<PopupMenuItem>) -> Self {
+        self.checkable.insert(self.menu_items.len());
+        self.menu_items.push(item.into());
         self
     }
 
@@ -853,6 +892,14 @@ impl PopupMenu {
         self.menu_items.is_empty()
     }
 
+    /// Whether `position` is over this menu or a submenu it has open.
+    pub(crate) fn contains(&self, position: Point<Pixels>, cx: &App) -> bool {
+        self.bounds.contains(&position)
+            || self
+                .active_submenu()
+                .is_some_and(|submenu| submenu.read(cx).contains(position, cx))
+    }
+
     fn clickable_menu_items(&self) -> impl Iterator<Item = (usize, &PopupMenuItem)> {
         self.menu_items
             .iter()
@@ -993,6 +1040,23 @@ impl PopupMenu {
         }
     }
 
+    /// Type-select, as native menus do: a letter moves to the next item whose
+    /// label starts with it, wrapping past the end.
+    fn on_key_down(&mut self, event: &KeyDownEvent, _: &mut Window, cx: &mut Context<Self>) {
+        let Some(letter) = typed_letter(&event.keystroke) else {
+            return;
+        };
+        let count = self.menu_items.len();
+        let start = self.selected_index.map_or(0, |ix| ix + 1);
+        let next = (0..count)
+            .map(|offset| (start + offset) % count)
+            .find(|&ix| self.menu_items[ix].starts_with(letter));
+        if let Some(ix) = next {
+            cx.stop_propagation();
+            self.set_selected_index(ix, cx);
+        }
+    }
+
     fn select_left(&mut self, _: &SelectLeft, window: &mut Window, cx: &mut Context<Self>) {
         let handled = if matches!(self.submenu_anchor.0, Anchor::TopLeft | Anchor::BottomLeft) {
             self._unselect_submenu(window, cx)
@@ -1099,6 +1163,18 @@ impl PopupMenu {
         }
     }
 
+    /// The side this menu slides in from: a submenu opens beside its parent,
+    /// on whichever side the parent placed it.
+    fn entrance_side(&self, cx: &App) -> Option<Placement> {
+        match self.parent_menu {
+            Some(_) => Some(match self.parent_side(cx) {
+                Side::Left => Placement::Right,
+                Side::Right => Placement::Left,
+            }),
+            None => self.entrance,
+        }
+    }
+
     /// Dismiss the menu and the entire parent chain.
     ///
     /// The submenu is closed together with its parent, same as macOS menus.
@@ -1193,12 +1269,6 @@ impl PopupMenu {
         .flatten()
         .find_map(|handle| Kbd::binding_for_action_in(action.as_ref(), handle, window))
         .or_else(|| Kbd::global_binding_for_action(action.as_ref(), window))
-        .map(|this| {
-            this.p_0()
-                .flex_nowrap()
-                .border_0()
-                .bg(gpui::transparent_white())
-        })
     }
 
     fn render_icon(
@@ -1278,9 +1348,9 @@ impl PopupMenu {
 
         let is_submenu = matches!(item, PopupMenuItem::Submenu { .. });
 
-        let (item_height, radius) = match self.size {
-            Size::Small => (px(20.), options.radius.half()),
-            _ => (px(26.), options.radius),
+        let item_height = match self.size {
+            Size::Small => px(20.),
+            _ => px(26.),
         };
 
         let this = MenuItemElement::new(ix)
@@ -1288,7 +1358,7 @@ impl PopupMenu {
             .text_sm()
             .py_0()
             .px(INNER_PADDING)
-            .rounded(radius)
+            .rounded(options.radius)
             .items_center()
             .selected(selected)
             .on_hover(cx.listener(move |this, hovered, window, cx| {
@@ -1539,10 +1609,10 @@ impl Render for PopupMenu {
         let options = RenderOptions {
             has_left_icon,
             check_side: self.check_side,
-            radius: cx.theme().radius.min(px(8.)),
+            radius: nested_radius(cx.theme().radius, POPUP_ITEM_INSET),
         };
 
-        v_flex()
+        let menu = v_flex()
             .id("popup-menu")
             .test_support()
             .role(Role::Menu)
@@ -1554,15 +1624,16 @@ impl Render for PopupMenu {
             .on_action(cx.listener(Self::select_right))
             .on_action(cx.listener(Self::confirm))
             .on_action(cx.listener(Self::dismiss))
+            .on_key_down(cx.listener(Self::on_key_down))
             .on_mouse_down_out(cx.listener(Self::on_mouse_down_out))
-            .popover_style(cx)
+            .popover_glass_style(cx)
             .text_color(cx.theme().popover_foreground)
             .relative()
             .occlude()
             .child(
                 v_flex()
                     .id("items")
-                    .p_1()
+                    .p(POPUP_ITEM_INSET)
                     .gap_y_0p5()
                     .min_w(rems(8.))
                     .when_some(self.min_width, |this, min_width| this.min_w(min_width))
@@ -1598,7 +1669,20 @@ impl Render for PopupMenu {
             )
             .when(self.scrollable, |this| {
                 this.vertical_scrollbar(&self.scroll_handle)
-            })
+            });
+
+        match self.entrance_side(cx) {
+            Some(side) => popup_entrance("enter", menu, side).into_any_element(),
+            None => menu.into_any_element(),
+        }
+    }
+}
+
+#[cfg(test)]
+impl PopupMenu {
+    /// Where the menu's items were drawn last, for tests.
+    pub(crate) fn item_bounds(&self) -> Bounds<Pixels> {
+        self.bounds
     }
 }
 
@@ -1650,6 +1734,38 @@ mod tests {
             panic!("expected the original mouse click");
         };
         assert_eq!(event.up.click_count, 2);
+    }
+
+    #[gpui::test]
+    fn typing_a_letter_selects_the_next_item_it_starts(cx: &mut gpui::TestAppContext) {
+        cx.update(crate::init);
+        let (menu, cx) = cx.add_window_view(|_, cx| {
+            PopupMenu::new(cx)
+                .label("Clipboard")
+                .item(PopupMenuItem::new("Copy"))
+                .separator()
+                .item(PopupMenuItem::new("cut"))
+                .item(PopupMenuItem::new("Paste"))
+                .item(PopupMenuItem::new("Copy link").disabled(true))
+        });
+        cx.update(|window, cx| {
+            window.draw(cx).clear(cx);
+            menu.read(cx).focus_handle.clone().focus(window, cx);
+        });
+
+        let mut selected_after = |keys: &str| {
+            cx.simulate_keystrokes(keys);
+            menu.read_with(cx, |menu, _| menu.selected_index)
+        };
+        assert_eq!(selected_after("c"), Some(1), "a label is not selectable");
+        assert_eq!(selected_after("c"), Some(3), "matching ignores case");
+        assert_eq!(
+            selected_after("c"),
+            Some(1),
+            "a disabled item is skipped, and the search wraps"
+        );
+        assert_eq!(selected_after("p"), Some(4));
+        assert_eq!(selected_after("x"), Some(4), "no match keeps the selection");
     }
 
     #[gpui::test]

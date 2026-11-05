@@ -2,13 +2,18 @@ use std::rc::Rc;
 
 use gpui::{
     Anchor, AnyElement, App, Context, ElementId, InteractiveElement as _, IntoElement,
-    ParentElement, RenderOnce, StyleRefinement, Styled, Window, div, prelude::FluentBuilder as _,
+    ParentElement, RenderOnce, Stateful, StyleRefinement, Styled, Window, div,
+    prelude::FluentBuilder as _,
 };
 use gpui_base::HoverCard as BaseHoverCard;
 pub use gpui_base::HoverCardState;
 use instant::Duration;
 
-use crate::{StyledExt as _, popover::Popover};
+use crate::{
+    Placement, StyledExt as _, ThemeStyled as _,
+    popover::{anchor_side, popup_entrance},
+    v_flex,
+};
 
 /// A hover card element that displays content when hovering over a trigger element.
 ///
@@ -138,7 +143,7 @@ impl RenderOnce for HoverCard {
             return div().id("empty").into_any_element();
         };
 
-        let anchor = self.anchor;
+        let side = anchor_side(self.anchor);
         let appearance = self.appearance;
         let content = self.content;
         let children = self.children;
@@ -146,18 +151,24 @@ impl RenderOnce for HoverCard {
         let trigger_style = self.trigger_style;
 
         BaseHoverCard::new(self.id)
-            .anchor(anchor)
+            .anchor(self.anchor)
             .open_delay(self.open_delay)
             .close_delay(self.close_delay)
             .trigger((trigger)(window, cx))
             .content(move |state, window, cx| {
-                Popover::render_popover_content(anchor, appearance, window, cx)
+                let surface = v_flex()
+                    .when(appearance, |this| this.popover_style(cx).p_3())
                     .overflow_hidden()
                     .when_some(content, |this, content| {
                         this.child((content)(state, window, cx))
                     })
                     .children(children)
-                    .refine_style(&style)
+                    .refine_style(&style);
+                gap(side).child(if appearance {
+                    popup_entrance("enter", surface, side).into_any_element()
+                } else {
+                    surface.into_any_element()
+                })
             })
             .when_some(self.on_open_change, |this, callback| {
                 this.on_open_change(move |open, window, cx| callback(open, window, cx))
@@ -165,6 +176,19 @@ impl RenderOnce for HoverCard {
             .when_some(trigger_style, |this, style| this.refine_style(&style))
             .into_any_element()
     }
+}
+
+/// The card's 0.25rem gap from its trigger. It sits on a wrapper so the
+/// surface inside stays free to slide in with [`popup_entrance`].
+fn gap(side: Placement) -> Stateful<gpui::Div> {
+    div()
+        .id("content")
+        .occlude()
+        .tab_group()
+        .map(|this| match side {
+            Placement::Top => this.bottom_1(),
+            Placement::Bottom | Placement::Left | Placement::Right => this.top_1(),
+        })
 }
 
 #[cfg(test)]

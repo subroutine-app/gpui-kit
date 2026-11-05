@@ -63,6 +63,7 @@ The default configuration is:
 | Spread | relative `0.3` | Highlight half-width as a fraction of text width; a fixed `Pixels` width is also accepted. |
 | Direction | left to right | `reverse(false)`. |
 | Repetition | looping | `once(false)`. |
+| Frame rate | 30 frames a second | `max_fps(30.)`. |
 | Reduced motion | static text | Animation frames are skipped while text remains visible. |
 
 The highlight follows the active theme rather than assuming a white highlight.
@@ -265,6 +266,18 @@ requesting animation frames. Marker follows the same rule for typed text and
 keeps arbitrary content static. This is a rendering behavior, not a separate
 builder option; applications should keep the label meaningful in both modes.
 
+The sweep draws at most 30 frames a second (`LOADING_ANIMATION_MAX_FPS`), so a
+"Thinking…" label that stays up for a whole reply does not keep the window
+drawing at the display's full rate. `max_fps(...)` sets a different rate for one
+shimmer or a shared `ShimmerStyle`, for example to match other animations an
+application holds to a lower rate:
+
+```rust
+ShimmerText::new("Thinking…").max_fps(12.)
+```
+
+Values that aren't finite and positive leave the rate unchanged.
+
 ## Accessibility guidance
 
 - Keep a meaningful text label visible to assistive technology. “Thinking…” or
@@ -302,6 +315,7 @@ Shimmer communicates activity, not progress.
 | `spread(f32 \| Pixels)` | relative `0.3` | Set half-width: `f32` is relative and clamps to `0.05..=1.0`; `Pixels` is absolute with a 1px minimum. |
 | `reverse(bool)` | `false` | Reverse the sweep direction. |
 | `once(bool)` | `false` | Play one sweep instead of looping. |
+| `max_fps(f32)` | `30.` | Set the most frames a second the sweep draws. |
 
 ### `ShimmerText`
 
@@ -315,6 +329,7 @@ Shimmer communicates activity, not progress.
 | `spread(f32 \| Pixels)` | relative `0.3` | Set spread directly. |
 | `reverse(bool)` | `false` | Set direction directly. |
 | `once(bool)` | `false` | Set repetition directly. |
+| `max_fps(f32)` | `30.` | Set the frame rate directly. |
 | `Styled` methods | inherited text style | Refine typography, color, wrapping, and layout. |
 
 ### Related components

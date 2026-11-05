@@ -56,9 +56,10 @@ let cursor = notes.read(cx).cursor_position(cx);
 let value = notes.read(cx).value();
 ```
 
-Use `soft_wrap(false)` when visual wrapping is undesirable. Set
-`submit_on_enter(true)` only when Enter should submit instead of inserting a
-line break. `TextareaState` emits the same `InputEvent` variants as `InputState`.
+Use `soft_wrap(false)` when visual wrapping is undesirable. Set `submit_keys`
+only when some Enter chords should submit instead of inserting a line break;
+see [Component Textarea](../../component/textarea.md#send-key).
+`TextareaState` emits the same `InputEvent` variants as `InputState`.
 
 ## Presentation
 

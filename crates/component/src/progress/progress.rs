@@ -1,4 +1,4 @@
-use crate::{ActiveTheme, Sizable, Size, StyledExt};
+use crate::{ActiveTheme, LOADING_ANIMATION_MAX_FPS, Sizable, Size, StyledExt};
 use gpui::{
     Animation, AnimationExt as _, App, Background, ElementId, Hsla, IntoElement, IsZero as _,
     ParentElement, RenderOnce, SharedString, StyleRefinement, Styled, Window, ease_in_out,
@@ -149,7 +149,9 @@ impl RenderOnce for Progress {
                         if loading && !reduce_motion {
                             this.with_animation(
                                 "progress-loading",
-                                Animation::new(Duration::from_secs(1)).repeat(),
+                                Animation::new(Duration::from_secs(1))
+                                    .repeat()
+                                    .with_max_fps(LOADING_ANIMATION_MAX_FPS),
                                 move |this, delta| {
                                     let start =
                                         relative(ease_in_out(((delta - 0.5) / 0.5).clamp(0., 1.)));

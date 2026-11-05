@@ -411,6 +411,13 @@ mod tests {
         });
     }
 
+    /// Lets a notched wheel's transition, which GPUI eases over 80 ms, land in the scroller.
+    fn settle(cx: &mut VisualTestContext) {
+        cx.executor()
+            .advance_clock(std::time::Duration::from_millis(100));
+        cx.update(|window, cx| window.draw(cx).clear(cx));
+    }
+
     fn swipe(cx: &mut VisualTestContext, delta: f32, touch_phase: TouchPhase) {
         cx.simulate_event(ScrollEvent {
             position: point(px(20.), px(20.)),
@@ -433,6 +440,7 @@ mod tests {
         let (outer_handle, cx) = nested_vertical_carousel(cx, &state);
 
         wheel_line(cx, -1.);
+        settle(cx);
 
         assert_eq!(
             state.read_with(cx, |state, _| state.selected_index()),
@@ -460,6 +468,7 @@ mod tests {
         cx.executor().advance_clock(SCROLL_EVENT_SEPARATION);
         cx.run_until_parked();
         wheel_line(cx, -1.);
+        settle(cx);
         assert_eq!(
             state.read_with(cx, |state, _| state.selected_index()),
             Some(1)

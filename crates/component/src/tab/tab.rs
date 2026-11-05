@@ -1,13 +1,17 @@
 use std::{rc::Rc, time::Duration};
 
 use crate::animation::{Lerp, ease_in_out_cubic};
-use crate::{ActiveTheme, Icon, IconName, Selectable, Sizable, Size, StyledExt, h_flex};
+use crate::theme::contrast_ratio;
+use crate::{
+    ActiveTheme, Icon, IconName, Selectable, Sizable, Size, StyledExt, Theme, concentric_radius,
+    h_flex, v_flex,
+};
 use gpui::prelude::FluentBuilder as _;
 use gpui::{
-    Animation, AnimationExt as _, AnyElement, App, Background, ClickEvent, Edges, ElementId,
-    FillOptions, Hsla, InteractiveElement, IntoElement, ParentElement, PathBuilder, PathStyle,
-    Pixels, Point, RenderOnce, SharedString, StatefulInteractiveElement, Styled, Window, canvas,
-    div, point, px, relative,
+    Animation, AnimationExt as _, AnyElement, App, Background, ClickEvent, Div, Edges, ElementId,
+    FillOptions, FocusHandle, Hsla, InteractiveElement, IntoElement, ParentElement, PathBuilder,
+    PathStyle, Pixels, Point, RenderOnce, SharedString, StatefulInteractiveElement, Styled, Window,
+    canvas, div, point, px, relative,
 };
 
 /// Room between two [`TabVariant::Folder`] tabs, holding their separator.
@@ -60,7 +64,84 @@ pub enum TabVariant {
     Folder,
 }
 
+/// The least contrast of the chosen segment's fill with the track.
+const SEGMENT_FILL_MIN_CONTRAST: f32 = 1.15;
+/// The least contrast of the chosen segment's outline with its fill and with
+/// the track.
+const SEGMENT_OUTLINE_MIN_CONTRAST: f32 = 1.4;
+/// The least contrast of the track's outline with the window.
+const TRACK_OUTLINE_MIN_CONTRAST: f32 = 1.2;
+/// The most contrast of the track's outline with the window.
+const TRACK_OUTLINE_MAX_CONTRAST: f32 = 2.;
+
 impl TabVariant {
+    /// The track behind segmented tabs, as an opaque color.
+    fn segmented_track(theme: &Theme) -> Hsla {
+        theme.background.blend(theme.tab_bar_segmented)
+    }
+
+    /// The fill and the outline of the chosen segment.
+    ///
+    /// The fill is `secondary`. Where that sits too close to the track, it's
+    /// the foreground at 8% opacity on a light theme and 10% on a dark one,
+    /// stronger where needed to stand out from the track. The outline is the
+    /// foreground at 30% opacity on a light theme and 25% on a dark one,
+    /// stronger where needed to stand out from both the fill and the track.
+    fn segmented_selection(theme: &Theme) -> (Hsla, Hsla) {
+        let track = Self::segmented_track(theme);
+        let dark = theme.is_dark();
+        let mut fill = track.blend(theme.secondary);
+        if contrast_ratio(fill, track) < SEGMENT_FILL_MIN_CONTRAST {
+            let tint = |alpha: f32| track.blend(theme.foreground.opacity(alpha));
+            let mut alpha: f32 = if dark { 0.1 } else { 0.08 };
+            while alpha < 1. && contrast_ratio(tint(alpha), track) < SEGMENT_FILL_MIN_CONTRAST {
+                alpha = (alpha + 0.01).min(1.);
+            }
+            fill = tint(alpha);
+        }
+        let faint = |alpha: f32| {
+            let line = fill.blend(theme.foreground.opacity(alpha));
+            contrast_ratio(line, fill).min(contrast_ratio(line, track))
+                < SEGMENT_OUTLINE_MIN_CONTRAST
+        };
+        let mut alpha: f32 = if dark { 0.25 } else { 0.3 };
+        while alpha < 1. && faint(alpha) {
+            alpha = (alpha + 0.05).min(1.);
+        }
+        (fill, theme.foreground.opacity(alpha))
+    }
+
+    /// The track's 1 px outline, in the theme's border color. A strong border
+    /// is faded toward the window, so no theme frames the control heavily. A
+    /// faint one gives way to the foreground at the least opacity that shows.
+    pub(super) fn segmented_track_outline(theme: &Theme) -> Hsla {
+        let track = Self::segmented_track(theme);
+        let edge = |color: Hsla| contrast_ratio(track.blend(color), theme.background);
+        if edge(theme.border) < TRACK_OUTLINE_MIN_CONTRAST {
+            let mut alpha: f32 = 0.15;
+            while alpha < 1. && edge(theme.foreground.opacity(alpha)) < TRACK_OUTLINE_MIN_CONTRAST {
+                alpha = (alpha + 0.01).min(1.);
+            }
+            return theme.foreground.opacity(alpha);
+        }
+        let mut alpha: f32 = 1.;
+        while alpha > 0. && edge(theme.border.opacity(alpha)) > TRACK_OUTLINE_MAX_CONTRAST {
+            alpha = (alpha - 0.05).max(0.);
+        }
+        theme.border.opacity(alpha)
+    }
+
+    /// The chosen segment, filled and outlined. A disabled selection keeps
+    /// the fill with a fainter outline.
+    pub(super) fn segmented_pill<E: Styled>(pill: E, disabled: bool, cx: &App) -> E {
+        let (fill, outline) = Self::segmented_selection(cx.theme());
+        pill.bg(fill).border_1().border_color(if disabled {
+            outline.opacity(0.5)
+        } else {
+            outline
+        })
+    }
+
     fn height(&self, size: Size) -> Pixels {
         match size {
             Size::XSmall => match self {
@@ -177,14 +258,12 @@ impl TabVariant {
                     ..Default::default()
                 },
                 border_color: cx.theme().transparent,
-                ..Default::default()
             },
             TabVariant::Outline => TabStyle {
                 fg: cx.theme().tab_foreground,
                 bg: cx.theme().transparent.into(),
                 borders: Edges::all(px(1.)),
                 border_color: cx.theme().border,
-                ..Default::default()
             },
             TabVariant::Pill => TabStyle {
                 fg: cx.theme().foreground,
@@ -192,20 +271,18 @@ impl TabVariant {
                 ..Default::default()
             },
             TabVariant::Segmented => TabStyle {
-                fg: cx.theme().tab_foreground,
+                fg: cx.theme().muted_foreground,
                 bg: cx.theme().transparent.into(),
                 ..Default::default()
             },
             TabVariant::Underline => TabStyle {
                 fg: cx.theme().tab_foreground,
                 bg: cx.theme().transparent.into(),
-                inner_bg: cx.theme().transparent.into(),
                 borders: Edges {
                     bottom: px(2.),
                     ..Default::default()
                 },
                 border_color: cx.theme().transparent,
-                ..Default::default()
             },
             TabVariant::Folder => TabStyle {
                 fg: cx.theme().tab_foreground,
@@ -215,7 +292,7 @@ impl TabVariant {
         }
     }
 
-    fn hovered(&self, selected: bool, cx: &App) -> TabStyle {
+    fn hovered(&self, cx: &App) -> TabStyle {
         match self {
             TabVariant::Tab => TabStyle {
                 fg: cx.theme().tab_active_foreground,
@@ -226,14 +303,12 @@ impl TabVariant {
                     ..Default::default()
                 },
                 border_color: cx.theme().transparent,
-                ..Default::default()
             },
             TabVariant::Outline => TabStyle {
                 fg: cx.theme().secondary_foreground,
                 bg: cx.theme().tokens.secondary_hover.into(),
                 borders: Edges::all(px(1.)),
                 border_color: cx.theme().border,
-                ..Default::default()
             },
             TabVariant::Pill => TabStyle {
                 fg: cx.theme().secondary_foreground,
@@ -241,25 +316,18 @@ impl TabVariant {
                 ..Default::default()
             },
             TabVariant::Segmented => TabStyle {
-                fg: cx.theme().tab_active_foreground,
+                fg: cx.theme().foreground,
                 bg: cx.theme().transparent.into(),
-                inner_bg: if selected {
-                    cx.theme().tokens.background.into()
-                } else {
-                    cx.theme().transparent.into()
-                },
                 ..Default::default()
             },
             TabVariant::Underline => TabStyle {
                 fg: cx.theme().tab_active_foreground,
                 bg: cx.theme().transparent.into(),
-                inner_bg: cx.theme().transparent.into(),
                 borders: Edges {
                     bottom: px(2.),
                     ..Default::default()
                 },
                 border_color: cx.theme().transparent,
-                ..Default::default()
             },
             // The hover fill is an inset rounded layer, see `Tab::render`.
             TabVariant::Folder => TabStyle {
@@ -281,14 +349,12 @@ impl TabVariant {
                     ..Default::default()
                 },
                 border_color: cx.theme().border,
-                ..Default::default()
             },
             TabVariant::Outline => TabStyle {
                 fg: cx.theme().primary,
                 bg: cx.theme().transparent.into(),
                 borders: Edges::all(px(1.)),
                 border_color: cx.theme().primary,
-                ..Default::default()
             },
             TabVariant::Pill => TabStyle {
                 fg: cx.theme().primary_foreground,
@@ -296,10 +362,8 @@ impl TabVariant {
                 ..Default::default()
             },
             TabVariant::Segmented => TabStyle {
-                fg: cx.theme().tab_active_foreground,
+                fg: cx.theme().foreground,
                 bg: cx.theme().transparent.into(),
-                inner_bg: cx.theme().tokens.background.into(),
-                shadow: true,
                 ..Default::default()
             },
             TabVariant::Underline => TabStyle {
@@ -310,7 +374,6 @@ impl TabVariant {
                     ..Default::default()
                 },
                 border_color: cx.theme().primary,
-                ..Default::default()
             },
             // The shape is painted by `folder_tab_shape`.
             TabVariant::Folder => TabStyle {
@@ -336,7 +399,6 @@ impl TabVariant {
                     right: px(1.),
                     ..Default::default()
                 },
-                ..Default::default()
             },
             TabVariant::Outline => TabStyle {
                 fg: cx.theme().muted_foreground,
@@ -347,7 +409,6 @@ impl TabVariant {
                 } else {
                     cx.theme().border
                 },
-                ..Default::default()
             },
             TabVariant::Pill => TabStyle {
                 fg: if selected {
@@ -363,13 +424,8 @@ impl TabVariant {
                 ..Default::default()
             },
             TabVariant::Segmented => TabStyle {
-                fg: cx.theme().muted_foreground,
-                bg: cx.theme().tokens.tab_bar.into(),
-                inner_bg: if selected {
-                    cx.theme().tokens.background.into()
-                } else {
-                    cx.theme().transparent.into()
-                },
+                fg: cx.theme().muted_foreground.opacity(0.65),
+                bg: cx.theme().transparent.into(),
                 ..Default::default()
             },
             TabVariant::Underline => TabStyle {
@@ -384,7 +440,6 @@ impl TabVariant {
                     bottom: px(2.),
                     ..Default::default()
                 },
-                ..Default::default()
             },
             TabVariant::Folder => TabStyle {
                 fg: cx.theme().muted_foreground,
@@ -418,15 +473,21 @@ impl TabVariant {
         }
     }
 
+    /// The gap between a segmented bar's outer edge, where its outline is
+    /// drawn, and the edge of each segment, the same on every side.
+    pub(super) fn segment_inset(size: Size) -> Pixels {
+        match size {
+            Size::XSmall => px(2.),
+            Size::Small => px(3.),
+            _ => px(4.),
+        }
+    }
+
     pub(super) fn inner_radius(&self, size: Size, cx: &App) -> Pixels {
         match self {
-            // The inset the active pill sits at, taken off the bar's own radius
-            // so the two curves stay concentric. Floored at zero: a square bar
-            // has nothing to inset from.
-            TabVariant::Segmented => match size {
-                Size::Large => (self.tab_bar_radius(size, cx) - px(3.)).max(px(0.)),
-                _ => (self.tab_bar_radius(size, cx) - px(2.)).max(px(0.)),
-            },
+            TabVariant::Segmented => {
+                concentric_radius(self.tab_bar_radius(size, cx), Self::segment_inset(size))
+            }
             _ => px(0.),
         }
     }
@@ -438,6 +499,16 @@ impl TabVariant {
             _ => px(0.),
         }
     }
+}
+
+/// A segment's label, as wide as its medium weight. The selected segment's
+/// label is medium weight, and a hidden medium copy holds every segment at
+/// that width, so selection never moves the other segments.
+fn segment_label(label: SharedString) -> Div {
+    v_flex()
+        .items_center()
+        .child(label.clone())
+        .child(div().h_0().overflow_hidden().font_medium().child(label))
 }
 
 /// The selected [`TabVariant::Folder`] tab: rounded on top and curving out at
@@ -508,14 +579,11 @@ fn quarter_circle_to(
     path.cubic_bezier_to(to, from + (corner - from) * K, to + (corner - to) * K);
 }
 
-#[allow(dead_code)]
 struct TabStyle {
     borders: Edges<Pixels>,
     border_color: Hsla,
     bg: Background,
     fg: Hsla,
-    shadow: bool,
-    inner_bg: Background,
 }
 
 impl Default for TabStyle {
@@ -525,8 +593,6 @@ impl Default for TabStyle {
             border_color: gpui::transparent_white(),
             bg: gpui::transparent_white().into(),
             fg: gpui::transparent_white(),
-            shadow: false,
-            inner_bg: gpui::transparent_white().into(),
         }
     }
 }
@@ -559,6 +625,8 @@ pub struct Tab {
     /// there rather than in a hover group, which would replace the caller's.
     pub(super) hovered: bool,
     pub(super) max_width: Option<Pixels>,
+    /// The handle the [`super::TabBar`]'s roving focus gives this tab.
+    pub(super) focus_handle: Option<FocusHandle>,
     pub(super) on_click: Option<Rc<dyn Fn(&ClickEvent, &mut Window, &mut App) + 'static>>,
 }
 
@@ -614,6 +682,7 @@ impl Default for Tab {
             variant: TabVariant::default(),
             size: Size::default(),
             max_width: None,
+            focus_handle: None,
             on_click: None,
         }
     }
@@ -769,11 +838,11 @@ impl Sizable for Tab {
 }
 
 impl RenderOnce for Tab {
-    fn render(self, _: &mut Window, cx: &mut App) -> impl IntoElement {
+    fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
         let mut normal_style = self.variant.normal(cx);
         let mut selected_style = self.variant.selected(cx);
         let mut disabled_style = self.variant.disabled(self.selected, cx);
-        let mut hover_style = self.variant.hovered(self.selected, cx);
+        let mut hover_style = self.variant.hovered(cx);
         if self.disabled {
             hover_style = self.variant.disabled(self.selected, cx);
         }
@@ -804,26 +873,25 @@ impl RenderOnce for Tab {
         let metrics = FolderTabMetrics::new(self.size, cx);
         let has_prefix = self.prefix.is_some();
 
-        let segmented_indicator_active =
-            self.variant == TabVariant::Segmented && self.indicator_active;
-        let has_inline_inner_bg =
-            self.selected && segmented_indicator_active && !self.indicator_ready;
-        let inline_inner_bg = tab_style.inner_bg;
-        let (inner_bg, hover_inner_bg) = if segmented_indicator_active && self.indicator_ready {
-            (cx.theme().transparent.into(), cx.theme().transparent.into())
-        } else if has_inline_inner_bg {
-            (inline_inner_bg, inline_inner_bg)
-        } else {
-            (tab_style.inner_bg, hover_style.inner_bg)
-        };
-        let inner_shadow = tab_style.shadow && !segmented_indicator_active;
+        // A selected segment draws its own pill until the bar's sliding
+        // indicator is ready, and always outside a bar.
+        let segmented_pill = self.variant == TabVariant::Segmented
+            && self.selected
+            && !(self.indicator_active && self.indicator_ready);
+        // A press leaves focus where it is, so a ring only ever marks a tab
+        // the keyboard moved to.
+        let focus_visible = !self.disabled
+            && window.last_input_was_keyboard()
+            && self
+                .focus_handle
+                .as_ref()
+                .is_some_and(|focus_handle| focus_handle.is_focused(window));
 
         // When a sliding indicator is active and ready, it alone represents the
         // selected state. Suppress the selected tab's own active background/border
-        // so the two don't overlap during the switch animation (Segmented already
-        // does this for its `inner_bg` above). Skip disabled tabs so a
-        // disabled-selected tab keeps its dimmed styling instead of the
-        // full-strength indicator color.
+        // so the two don't overlap during the switch animation. Skip disabled
+        // tabs so a disabled-selected tab keeps its dimmed styling instead of
+        // the full-strength indicator color.
         let suppress_active_visual =
             self.selected && !self.disabled && self.indicator_active && self.indicator_ready;
         // Pill paints its active state via the outer `bg`.
@@ -892,6 +960,9 @@ impl RenderOnce for Tab {
                                 .text_ellipsis()
                                 .child(label),
                         ),
+                        (Some(label), None) if self.variant == TabVariant::Segmented => {
+                            this.child(segment_label(label))
+                        }
                         (Some(label), None) => this.child(label),
                         (None, _) => this,
                     })
@@ -899,10 +970,7 @@ impl RenderOnce for Tab {
                     // With the prefix's gap, 8px between icon and title, as in a Button.
                     .when(folder && has_prefix, |this| this.pl(px(4.))),
             })
-            .bg(inner_bg)
-            .rounded(inner_radius)
-            .when(inner_shadow, |this| this.shadow_xs())
-            .hover(|this| this.bg(hover_inner_bg).rounded(inner_radius));
+            .rounded(inner_radius);
 
         let inner_element = if animate_fg {
             inner_content
@@ -920,6 +988,9 @@ impl RenderOnce for Tab {
             .id(self.ix)
             .selected(self.selected)
             .disabled(self.disabled)
+            .when_some(self.focus_handle, |this, focus_handle| {
+                this.track_focus(&focus_handle)
+            })
             .when_some(aria_label, |this, label| this.accessibility_label(label))
             .styles(|styles| {
                 styles
@@ -963,6 +1034,10 @@ impl RenderOnce for Tab {
                 Size::Large => this.text_base(),
                 _ => this.text_sm(),
             })
+            .when(
+                self.variant == TabVariant::Segmented && self.selected,
+                |this| this.font_medium(),
+            )
             .rounded(radius)
             .when(folder, |this| {
                 this.px(metrics.padding_x).pb(metrics.top_padding)
@@ -1025,24 +1100,14 @@ impl RenderOnce for Tab {
                         .bg(cx.theme().border),
                 )
             })
-            .when(has_inline_inner_bg, |this| {
+            .when(segmented_pill, |this| {
                 this.child(
-                    div()
-                        .absolute()
-                        .left_0()
-                        .right_0()
-                        .top_0()
-                        .bottom_0()
-                        .flex()
-                        .items_center()
-                        .child(
-                            div()
-                                .w_full()
-                                .h(inner_height)
-                                .bg(inline_inner_bg)
-                                .rounded(inner_radius)
-                                .when(tab_style.shadow, |this| this.shadow_sm()),
-                        ),
+                    div().absolute().inset_0().flex().items_center().child(
+                        TabVariant::segmented_pill(div(), self.disabled, cx)
+                            .w_full()
+                            .h(inner_height)
+                            .rounded(inner_radius),
+                    ),
                 )
             })
             // Under `max_width` the label is the only part that gives way, so
@@ -1060,6 +1125,17 @@ impl RenderOnce for Tab {
                     div()
                         .when_some(max_width, |this, _| this.flex_shrink_0())
                         .child(suffix),
+                )
+            })
+            // Inside the tab, because the tab and its bar clip what's outside.
+            .when(focus_visible, |this| {
+                this.child(
+                    div()
+                        .absolute()
+                        .inset_0()
+                        .rounded(radius)
+                        .border_2()
+                        .border_color(cx.theme().ring),
                 )
             })
             .when_some(self.on_click.clone(), |this, on_click| {
@@ -1136,6 +1212,104 @@ mod tests {
                     .width
             })
             .collect()
+    }
+
+    /// The contrast `checks` gives every variant of every bundled theme and of
+    /// both defaults, as `(what, ratio, least, most)`, that falls outside its
+    /// range.
+    fn segmented_contrast_failures(
+        checks: impl Fn(&crate::Theme) -> Vec<(&'static str, f32, f32, f32)>,
+    ) -> Vec<String> {
+        use crate::{Theme, ThemeSet};
+
+        let dir = concat!(env!("CARGO_MANIFEST_DIR"), "/../../themes");
+        let mut paths: Vec<_> = std::fs::read_dir(dir)
+            .unwrap()
+            .map(|entry| entry.unwrap().path())
+            .filter(|path| path.extension().and_then(|e| e.to_str()) == Some("json"))
+            .collect();
+        paths.push(concat!(env!("CARGO_MANIFEST_DIR"), "/src/theme/default-theme.json").into());
+        paths
+            .into_iter()
+            .flat_map(|path| {
+                let set: ThemeSet =
+                    serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+                set.themes
+            })
+            .flat_map(|config| {
+                let name = config.name.clone();
+                let mut theme = Theme::default();
+                theme.apply_config(&Rc::new(config));
+                checks(&theme)
+                    .into_iter()
+                    .filter(|(_, ratio, least, most)| !(*least..=*most).contains(ratio))
+                    .map(move |(what, ratio, _, _)| format!("{name}: {what} {ratio:.2}"))
+                    .collect::<Vec<_>>()
+            })
+            .collect()
+    }
+
+    /// The track's outline shows without framing the control heavily, and
+    /// the chosen segment's fill and outline stand out.
+    #[test]
+    fn segmented_outlines_and_fill_keep_their_contrast_in_every_bundled_theme() {
+        let failures = segmented_contrast_failures(|theme| {
+            let track = TabVariant::segmented_track(theme);
+            let (fill, outline) = TabVariant::segmented_selection(theme);
+            let edge = track.blend(TabVariant::segmented_track_outline(theme));
+            let line = fill.blend(outline);
+            vec![
+                (
+                    "track outline",
+                    contrast_ratio(edge, theme.background),
+                    TRACK_OUTLINE_MIN_CONTRAST,
+                    TRACK_OUTLINE_MAX_CONTRAST,
+                ),
+                (
+                    "fill",
+                    contrast_ratio(fill, track),
+                    SEGMENT_FILL_MIN_CONTRAST,
+                    21.,
+                ),
+                (
+                    "outline on fill",
+                    contrast_ratio(line, fill),
+                    SEGMENT_OUTLINE_MIN_CONTRAST,
+                    21.,
+                ),
+                (
+                    "outline on track",
+                    contrast_ratio(line, track),
+                    SEGMENT_OUTLINE_MIN_CONTRAST,
+                    21.,
+                ),
+            ]
+        });
+        assert!(failures.is_empty(), "{failures:#?}");
+    }
+
+    /// Both labels reach 4.5:1 against what is behind them.
+    #[test]
+    fn segmented_labels_are_legible_in_every_bundled_theme() {
+        let failures = segmented_contrast_failures(|theme| {
+            let track = TabVariant::segmented_track(theme);
+            let (fill, _) = TabVariant::segmented_selection(theme);
+            vec![
+                (
+                    "chosen label",
+                    contrast_ratio(fill.blend(theme.foreground), fill),
+                    4.5,
+                    21.,
+                ),
+                (
+                    "other labels",
+                    contrast_ratio(track.blend(theme.muted_foreground), track),
+                    4.5,
+                    21.,
+                ),
+            ]
+        });
+        assert!(failures.is_empty(), "{failures:#?}");
     }
 
     #[gpui::test]

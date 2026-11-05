@@ -6,7 +6,7 @@ use gpui::{
     StatefulInteractiveElement as _, StyleRefinement, Styled, Window, div, point,
     prelude::FluentBuilder as _, px,
 };
-use gpui_base::spring;
+use gpui_base::{RovingFocus, spring};
 use rust_i18n::t;
 use smallvec::SmallVec;
 
@@ -19,7 +19,7 @@ use crate::menu::{DropdownMenu as _, PopupMenuItem};
 use crate::scroll::ScrollableMask;
 use crate::{
     ActiveTheme, ElementExt, Icon, InteractiveElementExt as _, Selectable, Sizable, Size,
-    StyledExt, h_flex, styled::raised_shadow,
+    StyledExt, h_flex,
 };
 
 struct TabIndicatorBounds {
@@ -138,8 +138,9 @@ impl TabBar {
     /// Track the scroll of the TabBar.
     ///
     /// Clicking a tab scrolls it into view along with part of the next tab,
-    /// but changing the selection, the tabs or the layout does not. Use the
-    /// tracked [`ScrollHandle`] to request an explicit reveal when needed.
+    /// and so does moving keyboard focus to it, but changing the selection,
+    /// the tabs or the layout does not. Use the tracked [`ScrollHandle`] to
+    /// request an explicit reveal when needed.
     pub fn track_scroll(mut self, scroll_handle: &ScrollHandle) -> Self {
         self.scroll_handle = Some(scroll_handle.clone());
         self
@@ -184,6 +185,10 @@ impl TabBar {
     /// Set the on_click callback of the TabBar, the first parameter is the index of the clicked tab.
     ///
     /// When this is set, the children's on_click will be ignored.
+    ///
+    /// Enter or Space on the focused tab calls it too. Tab reaches the bar on
+    /// its selected tab, the arrow keys and Home and End move focus between
+    /// the enabled tabs, and moving focus leaves the selection alone.
     pub fn on_click<F>(mut self, on_click: F) -> Self
     where
         F: Fn(&usize, &mut Window, &mut App) + 'static,
@@ -271,12 +276,10 @@ impl TabBar {
             .w(width)
             .map(|el| match variant {
                 TabVariant::Segmented => el.flex().items_center().child(
-                    div()
+                    TabVariant::segmented_pill(div(), self.children[selected_ix].disabled, cx)
                         .w_full()
                         .h(inner_height)
-                        .bg(cx.theme().tokens.background)
-                        .rounded(inner_radius)
-                        .shadow(raised_shadow()),
+                        .rounded(inner_radius),
                 ),
                 TabVariant::Pill => el.flex().items_center().child(
                     div()
@@ -396,11 +399,7 @@ impl RenderOnce for TabBar {
                 (cx.theme().transparent.into(), padding, px(4.))
             }
             TabVariant::Segmented => {
-                let padding_x = match self.size {
-                    Size::XSmall => px(2.),
-                    Size::Small => px(3.),
-                    _ => px(4.),
-                };
+                let padding_x = TabVariant::segment_inset(self.size);
                 let padding = Edges {
                     left: padding_x,
                     right: padding_x,
@@ -478,6 +477,15 @@ impl RenderOnce for TabBar {
         };
         reveal.advance(window, cx);
 
+        // One Tab stop for the whole bar, on the selected tab.
+        let focus = RovingFocus::keyed(format!("{}-tab-focus", self.id), window, cx);
+        focus.set_items(
+            self.children.iter().map(|tab| !tab.disabled),
+            self.selected_index,
+            cx,
+        );
+        focus.track_scroll(&scroll_handle);
+
         let padding_x = paddings.left;
         let indicator = self.render_indicator(&bounds_rc, window, cx);
         let indicator_epoch = indicator.as_ref().map(|(_, epoch)| *epoch).unwrap_or(0);
@@ -493,7 +501,7 @@ impl RenderOnce for TabBar {
             Option<TabClickHandler>,
         )> = Vec::new();
         let selected_index = self.selected_index;
-        let tabs = self.base;
+        let tabs = self.base.roving_focus(&focus);
         let mut rendered_tabs = Vec::with_capacity(self.children.len());
         let max_width = self.max_width;
         // A hovered folder tab shows its fill and hides the separators beside
@@ -522,6 +530,7 @@ impl RenderOnce for TabBar {
             tab.indicator_ready = indicator_ready;
             tab.indicator_epoch = indicator_epoch;
             tab.hovered = hovered_ix == Some(ix);
+            tab.focus_handle = focus.handle(ix);
             tab.separator = self.variant == TabVariant::Folder
                 && ix + 1 < num_tabs
                 && !has_shape(ix)
@@ -731,6 +740,19 @@ impl RenderOnce for TabBar {
                 )
             })
             .when_some(self.suffix, |this, suffix| this.child(suffix))
+            // The segmented track's outline, drawn last so a segment scrolled to
+            // the edge can't cover it, and positioned outside the layout so the
+            // bar keeps its height.
+            .when(self.variant == TabVariant::Segmented, |this| {
+                this.child(
+                    div()
+                        .absolute()
+                        .inset_0()
+                        .rounded(self.variant.tab_bar_radius(self.size, cx))
+                        .border_1()
+                        .border_color(TabVariant::segmented_track_outline(cx.theme())),
+                )
+            })
     }
 }
 
@@ -1863,6 +1885,10 @@ mod tests {
                     gpui::ScrollDelta::Lines(point(0., -1.)),
                     gpui::TouchPhase::Moved,
                 );
+                // GPUI eases a notched wheel over 80 ms; let it land in the scroller.
+                cx.executor()
+                    .advance_clock(std::time::Duration::from_millis(100));
+                draw(cx);
                 let first_after = cx.debug_bounds("wheel-tab-0").unwrap();
                 if tabs > 1 && !at_end {
                     assert!(scroll_handle.offset().x < before_x);
@@ -2134,5 +2160,169 @@ mod tests {
         let cx = show_late_bar(cx, px(0.));
         next_frame(cx);
         assert_eq!(cx.update(|window, cx| window.simulate_next_frame(cx)), 0);
+    }
+
+    /// A segment sits the same inset from the bar's outer edge on every side,
+    /// and its corners take the bar's radius less that inset, so the two
+    /// curves are concentric.
+    #[gpui::test]
+    fn segment_corners_are_concentric_with_the_bar(cx: &mut TestAppContext) {
+        struct SegmentedHarness(Size);
+
+        impl Render for SegmentedHarness {
+            fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+                div().flex().flex_col().items_start().child(
+                    div().debug_selector(|| "bar".into()).child(
+                        TabBar::new("segmented")
+                            .with_size(self.0)
+                            .segmented()
+                            .selected_index(0)
+                            .child(Tab::new().label("One").debug_selector(|| "tab".into())),
+                    ),
+                )
+            }
+        }
+
+        cx.update(crate::init);
+        let variant = TabVariant::Segmented;
+        for size in [Size::XSmall, Size::Small, Size::Medium, Size::Large] {
+            let (_, cx) = cx.add_window_view(move |_, _| SegmentedHarness(size));
+            draw(cx);
+            draw(cx);
+            let bar = cx.debug_bounds("bar").unwrap();
+            let tab = cx.debug_bounds("tab").unwrap();
+            let inset = tab.left() - bar.left();
+            let segment = variant.inner_height(size);
+            assert_eq!(bar.size.height - segment, inset * 2., "{size:?}");
+            cx.update(|_, cx| {
+                assert_eq!(
+                    variant.inner_radius(size, cx),
+                    (variant.tab_bar_radius(size, cx) - inset).max(px(0.)),
+                    "{size:?}"
+                );
+            });
+        }
+    }
+
+    /// Six 60px tabs in a 120px bar, the fourth disabled, the second selected.
+    struct KeyboardHarness {
+        selected: Rc<Cell<usize>>,
+        scroll_handle: ScrollHandle,
+        variant: TabVariant,
+    }
+
+    impl Render for KeyboardHarness {
+        fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+            let selected = self.selected.clone();
+            div().w(px(120.)).child(
+                TabBar::new("keyboard-tabs")
+                    .with_variant(self.variant)
+                    .w_full()
+                    .track_scroll(&self.scroll_handle)
+                    .selected_index(self.selected.get())
+                    .on_click(move |ix, _, _| selected.set(*ix))
+                    .children((0..6).map(|ix| {
+                        Tab::new()
+                            .w(px(60.))
+                            .label(format!("Tab {ix}"))
+                            .disabled(ix == 3)
+                    })),
+            )
+        }
+    }
+
+    fn keyboard_harness(
+        cx: &mut TestAppContext,
+        variant: TabVariant,
+    ) -> (&mut gpui::VisualTestContext, Rc<Cell<usize>>, ScrollHandle) {
+        cx.update(crate::init);
+        let selected = Rc::new(Cell::new(1));
+        let scroll_handle = ScrollHandle::new();
+        let (_, cx) = cx.add_window_view({
+            let selected = selected.clone();
+            let scroll_handle = scroll_handle.clone();
+            move |_, _| KeyboardHarness {
+                selected,
+                scroll_handle,
+                variant,
+            }
+        });
+        draw(cx);
+        (cx, selected, scroll_handle)
+    }
+
+    fn press(cx: &mut gpui::VisualTestContext, key: &'static str) {
+        let keystroke = gpui::Keystroke::parse(key).unwrap();
+        cx.simulate_event(gpui::KeyDownEvent {
+            keystroke: keystroke.clone(),
+            is_held: false,
+            prefer_character_input: false,
+        });
+        cx.simulate_event(gpui::KeyUpEvent { keystroke });
+    }
+
+    #[gpui::test]
+    fn keyboard_moves_between_enabled_tabs_and_enter_selects(cx: &mut TestAppContext) {
+        let (cx, selected, _) = keyboard_harness(cx, TabVariant::Tab);
+        cx.update(|window, cx| window.focus_next(cx));
+
+        // Tab lands on the selected tab, so Enter keeps it selected.
+        press(cx, "enter");
+        assert_eq!(selected.get(), 1);
+
+        cx.simulate_keystrokes("right right");
+        press(cx, "enter");
+        assert_eq!(selected.get(), 4, "the disabled tab is skipped");
+
+        cx.simulate_keystrokes("end right");
+        press(cx, "space");
+        assert_eq!(selected.get(), 0, "focus wraps past the last tab");
+
+        cx.simulate_keystrokes("left");
+        assert_eq!(selected.get(), 0, "moving focus leaves the selection alone");
+        press(cx, "enter");
+        assert_eq!(selected.get(), 5);
+    }
+
+    #[gpui::test]
+    fn segmented_keyboard_navigation_skips_disabled_tabs(cx: &mut TestAppContext) {
+        let (cx, selected, _) = keyboard_harness(cx, TabVariant::Segmented);
+        cx.update(|window, cx| window.focus_next(cx));
+        cx.simulate_keystrokes("right right");
+        press(cx, "enter");
+        assert_eq!(selected.get(), 4);
+        cx.simulate_keystrokes("left");
+        press(cx, "space");
+        assert_eq!(selected.get(), 2);
+    }
+
+    #[gpui::test]
+    fn a_tab_the_keyboard_reaches_is_scrolled_into_view(cx: &mut TestAppContext) {
+        let (cx, _, scroll_handle) = keyboard_harness(cx, TabVariant::Tab);
+        cx.update(|window, cx| window.focus_next(cx));
+        assert_eq!(scroll_handle.offset().x, px(0.));
+
+        cx.simulate_keystrokes("end");
+        draw(cx);
+
+        assert!(
+            scroll_handle.offset().x < px(-200.),
+            "the last tab is in view, at offset {:?}",
+            scroll_handle.offset()
+        );
+    }
+
+    #[gpui::test]
+    fn only_the_selected_tab_is_a_tab_stop(cx: &mut TestAppContext) {
+        let (cx, selected, _) = keyboard_harness(cx, TabVariant::Tab);
+        cx.update(|window, cx| {
+            window.focus_next(cx);
+            window.focus_next(cx);
+        });
+
+        // Tab again leaves the bar, and there is nothing else to reach, so
+        // focus comes back around to the selected tab.
+        press(cx, "enter");
+        assert_eq!(selected.get(), 1);
     }
 }

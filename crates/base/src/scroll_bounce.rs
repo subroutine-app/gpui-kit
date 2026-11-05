@@ -136,8 +136,10 @@ impl ScrollBounceMotion {
 /// imposed.
 ///
 /// Nested scroll areas follow the platform: the innermost one under the
-/// pointer takes the whole gesture, at its ends too, and bounces there
-/// rather than handing the rest to the area around it. A disabled
+/// pointer that can move takes the gesture, and keeps it to its end, where it
+/// bounces rather than handing the rest to the area around it. A gesture that
+/// starts at its end, after a pause of half a second or a new touch, goes to
+/// the area around it, the way a browser chains scrolling. A disabled
 /// `ScrollBounce` still scrolls its child and keeps the gesture from the
 /// areas around it; it only stops at the ends instead of stretching.
 pub struct ScrollBounce {
@@ -184,8 +186,9 @@ impl ScrollBounce {
     }
 
     /// Own vertical scrolling using the shared input overscroll engine.
-    /// Precise pixel input can bounce; ordinary line-wheel input only scrolls
-    /// and cancels any existing displacement. Keep fixed chrome outside it.
+    /// Precise pixel input can bounce; a notched wheel only scrolls, eased by
+    /// the child, and cancels any existing displacement. Keep fixed chrome
+    /// outside it.
     ///
     /// On by default. Turned off, the child scrolls itself and only its
     /// unused deltas stretch the edge; that needs input that emits `Ended`
@@ -221,6 +224,8 @@ struct State {
     /// Sign of the stream being suppressed, when it is known to be momentum
     /// that cannot reverse. `None` suppresses both directions.
     suppressed_direction: Option<f32>,
+    gesture: WheelGesture,
+    claim: Claim,
 }
 
 impl State {
@@ -245,6 +250,70 @@ const CATCH_DRAG_SLOP: f32 = 8.;
 // send precise deltas with no phase: they never send the `Started` that
 // otherwise ends suppression, and would stay locked after one bounce.
 const MOMENTUM_GAP: Duration = Duration::from_millis(250);
+
+/// A pause between wheel events this long ends a gesture over a nested area.
+/// Browsers keep a wheel gesture with the area it started in about as long.
+const GESTURE_GAP: Duration = Duration::from_millis(500);
+
+/// Whether an area takes the wheel event being dispatched, decided in its
+/// capture phase.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+enum Claim {
+    /// The areas around this one take the event.
+    #[default]
+    Declined,
+    /// This area takes the event without moving for it: it is at its end in
+    /// a gesture it moved in, or the event does not scroll it vertically.
+    Holds,
+    /// This area takes the event and moves for it.
+    Moves,
+}
+
+/// The wheel gesture over one area, which decides whether the area keeps an
+/// event at its end or leaves it to the areas around it.
+#[derive(Default)]
+struct WheelGesture {
+    last_event: Option<Instant>,
+    moved: bool,
+}
+
+impl WheelGesture {
+    /// The claim of an area at `offset`, in `-max..=0`, on a vertical wheel
+    /// `delta`. A gesture the area moved in stays with it to the end, where it
+    /// stretches; one that starts at its end goes to the areas around it, the
+    /// way a browser chains scrolling.
+    fn claim(
+        &mut self,
+        delta: Pixels,
+        offset: Pixels,
+        max: Pixels,
+        phase: TouchPhase,
+        now: Instant,
+    ) -> Claim {
+        let resumed = self
+            .last_event
+            .replace(now)
+            .is_some_and(|at| now.saturating_duration_since(at) < GESTURE_GAP);
+        if phase == TouchPhase::Started || !resumed {
+            self.moved = false;
+        }
+        let can_move = (delta < px(0.) && offset > -max) || (delta > px(0.) && offset < px(0.));
+        if can_move {
+            Claim::Moves
+        } else if self.moved || delta == px(0.) {
+            Claim::Holds
+        } else {
+            Claim::Declined
+        }
+    }
+}
+
+/// Whether a wheel event scrolls more vertically than horizontally, the axis
+/// a [`ScrollBounce`] owns.
+fn is_vertical(event: &ScrollEvent, window: &Window) -> bool {
+    let delta = event.delta.pixel_delta(window.line_height());
+    delta.y.abs() >= delta.x.abs()
+}
 
 /// Which scroll area under the pointer takes the current wheel event.
 ///
@@ -342,7 +411,8 @@ impl Element for ScrollBounce {
                 state.overscroll.offset()
             } else {
                 state.physics.motion = self.motion;
-                let now = Instant::now();
+                // The window's clock, which a test clock moves.
+                let now = cx.background_executor().now();
                 let elapsed = state
                     .sampled_at
                     .replace(now)
@@ -385,12 +455,42 @@ impl Element for ScrollBounce {
         if self.scroll_wheel {
             let hitbox = prepaint.hitbox.id;
             let handle = self.handle.clone();
-            window.on_mouse_event(move |_: &ScrollEvent, phase, window, cx| {
-                if phase == DispatchPhase::Capture
-                    && hitbox.should_handle_scroll(window)
-                    && max_scroll_extent(handle.as_ref()) > px(0.)
-                {
-                    claim_scroll(hitbox, cx);
+            let state = prepaint.state.clone();
+            window.on_mouse_event(move |event: &ScrollEvent, phase, window, cx| {
+                if !hitbox.should_handle_scroll(window) {
+                    return;
+                }
+                let mut state = state.borrow_mut();
+                match phase {
+                    DispatchPhase::Capture => {
+                        let max = max_scroll_extent(handle.as_ref());
+                        state.claim = if max <= px(0.) {
+                            Claim::Declined
+                        } else if is_vertical(event, window) {
+                            let delta = event.delta.pixel_delta(window.line_height()).y;
+                            let offset = handle.offset().y.clamp(-max, px(0.));
+                            let now = cx.background_executor().now();
+                            state
+                                .gesture
+                                .claim(delta, offset, max, event.touch_phase, now)
+                        } else {
+                            Claim::Holds
+                        };
+                        if state.claim != Claim::Declined {
+                            claim_scroll(hitbox, cx);
+                        }
+                    }
+                    // A notch eases in the child, which scrolls in this phase
+                    // before this listener runs; the areas around stay still.
+                    DispatchPhase::Bubble => {
+                        if state.claim != Claim::Declined
+                            && owns_scroll(hitbox, cx)
+                            && matches!(event.delta, ScrollDelta::Lines(_))
+                            && is_vertical(event, window)
+                        {
+                            cx.stop_propagation();
+                        }
+                    }
                 }
             });
         }
@@ -532,7 +632,7 @@ impl Element for ScrollBounce {
                     }
                 }
                 if changed {
-                    state.sampled_at = Some(Instant::now());
+                    state.sampled_at = Some(cx.background_executor().now());
                 }
                 drop(state);
                 if changed {
@@ -563,6 +663,13 @@ impl Element for ScrollBounce {
                 }
                 let mut delta = event.delta.pixel_delta(window.line_height());
                 let mut state = state.borrow_mut();
+                // The owner of an earlier event, which this one passed by.
+                if state.claim == Claim::Declined {
+                    return;
+                }
+                if state.claim == Claim::Moves {
+                    state.gesture.moved = true;
+                }
                 state
                     .ongoing_scroll
                     .lock_axis(&mut delta, event.touch_phase);
@@ -578,7 +685,19 @@ impl Element for ScrollBounce {
                     return;
                 }
                 let before = handle.offset();
-                let changed = if !bounces || matches!(event.delta, ScrollDelta::Lines(_)) {
+                if matches!(event.delta, ScrollDelta::Lines(_)) {
+                    // The child eases a notch itself, with the vendored GPUI's
+                    // wheel transition, and the claim keeps it from the areas
+                    // around this one.
+                    let displaced = state.overscroll.offset() != 0.;
+                    state.overscroll.reset();
+                    drop(state);
+                    if displaced {
+                        cx.notify(view);
+                    }
+                    return;
+                }
+                let changed = if !bounces {
                     let displaced = state.overscroll.offset() != 0.;
                     state.overscroll.reset();
                     let mut offset = before;
@@ -899,7 +1018,8 @@ mod tests {
             ..Default::default()
         });
         draw(cx);
-        cx.executor().advance_clock(Duration::from_millis(16));
+        // Past the notch's 80 ms ease.
+        cx.executor().advance_clock(Duration::from_millis(100));
         draw(cx);
         assert_eq!(handle.offset().y, -handle.max_offset().y);
         assert_eq!(handle.bounds().origin, origin);
@@ -928,11 +1048,13 @@ mod tests {
         draw(cx);
         let end = handle.offset().y;
         wheel(cx, 2.);
+        draw(cx);
+        cx.executor().advance_clock(Duration::from_millis(100));
+        draw(cx);
         assert!(
             handle.offset().y > end,
-            "the new wheel input scrolls before the next frame"
+            "the new wheel input eases the area back from its end"
         );
-        draw(cx);
     }
 
     /// A scroll area with a shorter one inside it, 100 px down.
@@ -1035,6 +1157,45 @@ mod tests {
         scroll_at(cx, 150., -500., TouchPhase::Moved);
         assert_eq!(areas.inner.offset().y, px(-300.));
         assert_eq!(areas.inner.bounds().origin.y, inner_origin);
+        assert_eq!(areas.outer.offset().y, px(0.));
+    }
+
+    #[gpui::test]
+    fn a_gesture_that_starts_at_the_inner_end_goes_to_the_outer_area(cx: &mut TestAppContext) {
+        let (areas, cx) = nested(cx, false);
+        scroll_at(cx, 150., -500., TouchPhase::Moved);
+        assert_eq!(areas.inner.offset().y, px(-300.));
+        assert_eq!(areas.outer.offset().y, px(0.));
+
+        cx.executor().advance_clock(GESTURE_GAP);
+        scroll_at(cx, 150., -50., TouchPhase::Moved);
+        assert_eq!(areas.outer.offset().y, px(-50.), "the outer area scrolls");
+        assert_eq!(areas.inner.offset().y, px(-300.));
+
+        // Back toward the start, the inner area can move again and takes it.
+        cx.executor().advance_clock(GESTURE_GAP);
+        scroll_at(cx, 100., 40., TouchPhase::Moved);
+        assert_eq!(areas.inner.offset().y, px(-260.));
+        assert_eq!(areas.outer.offset().y, px(-50.));
+    }
+
+    #[cfg(not(feature = "gpui-fast"))]
+    #[gpui::test]
+    fn a_notch_eases_the_inner_area_and_leaves_the_outer_still(cx: &mut TestAppContext) {
+        let (areas, cx) = nested(cx, true);
+        cx.simulate_event(ScrollEvent {
+            position: point(px(100.), px(150.)),
+            delta: ScrollDelta::Lines(point(0., -1.)),
+            ..Default::default()
+        });
+        draw(cx);
+        cx.executor().advance_clock(Duration::from_millis(40));
+        draw(cx);
+        let midway = areas.inner.offset().y;
+        cx.executor().advance_clock(Duration::from_millis(60));
+        draw(cx);
+        let landed = areas.inner.offset().y;
+        assert!(landed < midway && midway < px(0.), "{midway:?} {landed:?}");
         assert_eq!(areas.outer.offset().y, px(0.));
     }
 
@@ -1374,6 +1535,37 @@ mod tests {
             draw(cx);
             assert_eq!(handle.offset().y, px(-40.));
         }
+    }
+
+    #[cfg(not(feature = "gpui-fast"))]
+    #[gpui::test]
+    fn a_released_edge_springs_back_by_the_windows_clock(cx: &mut TestAppContext) {
+        let handle = ScrollHandle::new();
+        let (_, cx) = cx.add_window_view({
+            let handle = handle.clone();
+            move |_, _| ScrollTest {
+                handle,
+                enabled: true,
+            }
+        });
+        draw(cx);
+        let origin = handle.bounds().origin.y;
+        scroll(cx, 100., TouchPhase::Started);
+        scroll(cx, 0., TouchPhase::Ended);
+        draw(cx);
+        let released = handle.bounds().origin.y;
+        assert!(released > origin);
+
+        cx.executor().advance_clock(Duration::from_millis(50));
+        draw(cx);
+        let returning = handle.bounds().origin.y;
+        assert!(
+            returning > origin && returning < released,
+            "{returning:?} between {origin:?} and {released:?}"
+        );
+        cx.executor().advance_clock(Duration::from_secs(2));
+        draw(cx);
+        assert_eq!(handle.bounds().origin.y, origin);
     }
 
     #[test]

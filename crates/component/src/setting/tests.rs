@@ -2,10 +2,11 @@ use super::*;
 use crate::{
     Root,
     group_box::GroupBoxVariant,
-    setting::{SettingGroup, SettingItem},
+    setting::{SettingField, SettingGroup, SettingItem},
 };
 use gpui::{
-    Context, Render, ScrollDelta, ScrollEvent, TestAppContext, VisualTestContext, point, size,
+    Context, Pixels, Render, ScrollDelta, ScrollEvent, SharedString, TestAppContext,
+    VisualTestContext, point, size,
 };
 
 struct SettingsHost {
@@ -326,11 +327,11 @@ fn group_variant_overrides_the_settings_default(cx: &mut TestAppContext) {
         0.,
         "the overridden group must lose the global Outline chrome"
     );
-    // A group without the override keeps the global Outline chrome:
-    // a 1px border and 16px padding above its items.
+    // A group without the override keeps the global Outline chrome: rows own
+    // their vertical padding, so the card adds only its 1px border above them.
     assert_eq!(
         f64::from(inherited_second.top() - baseline_second.top()),
-        17.,
+        1.,
         "groups without an override must keep the settings-level variant"
     );
 }
@@ -364,3 +365,168 @@ fn selecting_a_group_from_another_page_scrolls_to_it(cx: &mut TestAppContext) {
     let target = cx.debug_bounds("setting-1-2-1").unwrap();
     assert!(target.top() >= px(0.) && target.bottom() <= px(700.));
 }
+
+struct ListHost {
+    query: SharedString,
+}
+
+fn marker(selector: &'static str) -> gpui::Div {
+    div()
+        .w(px(40.))
+        .h(px(20.))
+        .debug_selector(move || selector.into())
+}
+
+impl Render for ListHost {
+    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+        use crate::setting::{SettingList, SettingRow, SettingSection};
+
+        let appearance = SettingSection::new("appearance")
+            .title("Appearance")
+            .row(
+                SettingRow::new("theme", "Theme")
+                    .keywords(["dark"])
+                    .control(marker("theme")),
+            )
+            .row(
+                SettingRow::new("density", "Density")
+                    .description("Row spacing")
+                    .control(marker("density")),
+            )
+            .child(marker("appearance-block"));
+        let sync = SettingSection::new("sync").title("Sync").row(
+            SettingRow::new("history", "History")
+                .info("Keeps 30 days")
+                .control(marker("history")),
+        );
+
+        div().size_full().child(
+            SettingList::new("list")
+                .query(self.query.clone())
+                .sections([appearance, sync])
+                .empty(marker("empty")),
+        )
+    }
+}
+
+#[gpui::test]
+fn setting_list_narrows_rows_and_keeps_matching_sections_whole(cx: &mut TestAppContext) {
+    cx.update(crate::init);
+    let mut host = None;
+    let (_, cx) = cx.add_window_view(|window, cx| {
+        let view = cx.new(|_| ListHost {
+            query: SharedString::default(),
+        });
+        host = Some(view.clone());
+        Root::new(view, window, cx)
+    });
+    let host = host.unwrap();
+    let visible = |query: &'static str, cx: &mut VisualTestContext| {
+        host.update(cx, |host, cx| {
+            host.query = query.into();
+            cx.notify();
+        });
+        draw(cx);
+        ["theme", "density", "appearance-block", "history", "empty"]
+            .into_iter()
+            .filter(|selector| cx.debug_bounds(selector).is_some())
+            .collect::<Vec<_>>()
+    };
+
+    assert_eq!(
+        visible("", cx),
+        ["theme", "density", "appearance-block", "history"]
+    );
+    // Keywords, descriptions and info are searched; blocks are opaque.
+    assert_eq!(visible("DARK", cx), ["theme"]);
+    assert_eq!(visible("spacing", cx), ["density"]);
+    assert_eq!(visible("30 days", cx), ["history"]);
+    // A matching section title keeps the whole section, blocks included.
+    assert_eq!(
+        visible("appearance", cx),
+        ["theme", "density", "appearance-block"]
+    );
+    assert_eq!(visible("no such setting", cx), ["empty"]);
+}
+
+struct RowHost {
+    width: Pixels,
+}
+
+impl Render for RowHost {
+    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+        div().w(self.width).child(
+            crate::setting::SettingRow::new("row", "Name").control(
+                div()
+                    .w(px(200.))
+                    .h(px(20.))
+                    .debug_selector(|| "control".into()),
+            ),
+        )
+    }
+}
+
+#[gpui::test]
+fn setting_row_wraps_its_control_below_a_narrow_label(cx: &mut TestAppContext) {
+    cx.update(|cx| {
+        crate::init(cx);
+        crate::Theme::global_mut(cx).font_size = px(16.);
+    });
+    let mut host = None;
+    let (_, cx) = cx.add_window_view(|window, cx| {
+        let view = cx.new(|_| RowHost { width: px(600.) });
+        host = Some(view.clone());
+        Root::new(view, window, cx)
+    });
+    let host = host.unwrap();
+    let control = |width: f32, cx: &mut VisualTestContext| {
+        host.update(cx, |host, cx| {
+            host.width = px(width);
+            cx.notify();
+        });
+        draw(cx);
+        cx.debug_bounds("control").unwrap()
+    };
+
+    // The 7.5rem label column and the control share one line, the control on
+    // the trailing edge.
+    let wide = control(600., cx);
+    assert_eq!(wide.right(), px(600.));
+    // Too narrow for both: the control moves below the label.
+    let narrow = control(300., cx);
+    assert!(narrow.top() > wide.bottom(), "{narrow:?} below {wide:?}");
+}
+
+#[gpui::test]
+fn item_info_keeps_the_field_typed_and_is_searchable(cx: &mut TestAppContext) {
+    let (host, cx) = setup(cx);
+    cx.update(|_, cx| {
+        host.update(cx, |host, cx| {
+            host.pages[1].groups[1].items = vec![
+                // A typed field behind `info` must still render as its type.
+                SettingItem::new(
+                    "Telemetry",
+                    SettingField::switch(|_: &App| true, |_: bool, _: &mut App| {}),
+                )
+                .info("Usage counts only"),
+                SettingItem::new(
+                    "Diagnostics",
+                    SettingField::render(|_, _, _| marker("diagnostics")),
+                )
+                .info("Crash reports"),
+            ];
+            cx.notify();
+        });
+    });
+    draw(cx);
+    assert!(cx.debug_bounds("diagnostics").is_some());
+
+    search(&host, "crash", cx);
+    assert!(cx.debug_bounds("diagnostics").is_some());
+    search(&host, "usage counts", cx);
+    assert!(cx.debug_bounds("diagnostics").is_none());
+    assert_eq!(selection(&host, cx), (1, None));
+}
+
+#[path = "narrow_tests.rs"]
+mod narrow;

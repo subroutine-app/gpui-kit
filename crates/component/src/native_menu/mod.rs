@@ -221,6 +221,16 @@ impl NativeMenu {
         #[cfg(not(any(target_os = "macos", target_os = "windows")))]
         fallback::show(self.items, position, window, cx);
     }
+
+    /// Pop up the menu at `position` as a [`crate::menu::PopupMenu`] drawn by
+    /// GPUI in the theme's colors, on every platform, as [`Self::show`] does
+    /// where the operating system has no popup menu. It keeps inside the
+    /// window.
+    pub(crate) fn show_drawn(self, position: Point<Pixels>, window: &mut Window, cx: &mut App) {
+        if !self.items.is_empty() {
+            fallback::show(self.items, position, window, cx);
+        }
+    }
 }
 
 #[cfg(any(target_os = "macos", target_os = "windows"))]

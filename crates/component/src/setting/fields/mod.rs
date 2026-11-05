@@ -39,22 +39,81 @@ pub(crate) trait SettingFieldRender {
 }
 
 pub(crate) fn get_value<T: Clone + 'static>(field: &Rc<dyn AnySettingField>, cx: &mut App) -> T {
-    let setting_field = field
-        .as_any()
-        .downcast_ref::<SettingField<T>>()
-        .expect("Failed to downcast setting field");
-    (setting_field.value)(cx)
+    (setting_field::<T>(field.as_ref()).value)(cx)
 }
 
 pub(crate) fn set_value<T: Clone + 'static>(
     field: &Rc<dyn AnySettingField>,
     _cx: &mut App,
 ) -> Rc<dyn Fn(T, &mut App)> {
-    let setting_field = field
-        .as_any()
-        .downcast_ref::<SettingField<T>>()
-        .expect("Failed to downcast setting field");
-    setting_field.set_value.clone()
+    setting_field::<T>(field.as_ref()).set_value.clone()
+}
+
+fn setting_field<T: 'static>(field: &dyn AnySettingField) -> &SettingField<T> {
+    let any = field.as_any();
+    match any.downcast_ref::<InfoField>() {
+        Some(annotated) => setting_field(annotated.field.as_ref()),
+        None => any
+            .downcast_ref::<SettingField<T>>()
+            .expect("Failed to downcast setting field"),
+    }
+}
+
+/// A setting item's field together with the item's info text.
+///
+/// `SettingItem::Item` has public fields, so new item presentation travels
+/// with its field rather than as a new variant field, which would break
+/// callers that construct or destructure the variant.
+pub(crate) struct InfoField {
+    field: Rc<dyn AnySettingField>,
+    info: SharedString,
+}
+
+impl InfoField {
+    pub(crate) fn wrap(field: Rc<dyn AnySettingField>, info: SharedString) -> Rc<Self> {
+        let field = match field.as_any().downcast_ref::<InfoField>() {
+            Some(annotated) => annotated.field.clone(),
+            None => field,
+        };
+        Rc::new(Self { field, info })
+    }
+
+    pub(crate) fn info(field: &dyn AnySettingField) -> Option<SharedString> {
+        field
+            .as_any()
+            .downcast_ref::<InfoField>()
+            .map(|annotated| annotated.info.clone())
+    }
+}
+
+impl AnySettingField for InfoField {
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn type_name(&self) -> &'static str {
+        self.field.type_name()
+    }
+
+    fn type_id(&self) -> std::any::TypeId {
+        AnySettingField::type_id(self.field.as_ref())
+    }
+
+    fn field_type(&self) -> &SettingFieldType {
+        self.field.field_type()
+    }
+
+    fn style(&self) -> &StyleRefinement {
+        self.field.style()
+    }
+
+    fn is_resettable(&self, cx: &App) -> bool {
+        self.field.is_resettable(cx)
+    }
+
+    fn reset(&self, window: &mut Window, cx: &mut App) {
+        self.field.reset(window, cx)
+    }
 }
 
 /// The type of setting field to render.

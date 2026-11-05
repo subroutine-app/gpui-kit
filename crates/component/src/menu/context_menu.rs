@@ -11,7 +11,7 @@ use gpui::{
     TouchPhase, Window, anchored, deferred, div, px,
 };
 
-use crate::{input::AnyInputState, menu::PopupMenu, root::WindowState};
+use crate::{Placement, input::AnyInputState, menu::PopupMenu, root::WindowState};
 
 /// A extension trait for adding a context menu to an element.
 pub trait ContextMenuExt: InteractiveElement + ParentElement + Styled {
@@ -354,10 +354,21 @@ impl<E: ParentElement + Styled + IntoElement + 'static> Element for ContextMenu<
         {
             window.set_focus_handle(trigger_focus, cx);
         }
-        let position = request_layout.shared_state.borrow().position;
-        request_layout.draws_menu.set(bounds.contains(&position));
+        let (position, shows_menu) = {
+            let shared_state = request_layout.shared_state.borrow();
+            let shows_menu = shared_state.open
+                && shared_state
+                    .menu_view
+                    .as_ref()
+                    .is_some_and(|menu| !menu.read(cx).is_empty());
+            (shared_state.position, shows_menu)
+        };
+        let draws_menu = bounds.contains(&position);
+        request_layout.draws_menu.set(draws_menu);
         if let Some(element) = &mut request_layout.element {
-            element.prepaint(window, cx);
+            gpui_base::prepaint_popup_trigger(shows_menu && draws_menu, || {
+                element.prepaint(window, cx)
+            });
         }
         window.insert_hitbox(bounds, HitboxBehavior::Normal)
     }
@@ -401,6 +412,10 @@ impl<E: ParentElement + Styled + IntoElement + 'static> Element for ContextMenu<
         let hitbox = hitbox.clone();
         window.on_mouse_event(move |event: &MouseDownEvent, phase, window, cx| {
             if phase.bubble() && event.button == MouseButton::Right && hitbox.is_hovered(window) {
+                // This menu takes the press, so selectable text under it opens
+                // no menu of its own, whatever order the listeners run in.
+                gpui_base::GlobalState::init(cx);
+                gpui_base::GlobalState::suppress_text_selection(cx);
                 cx.stop_propagation();
                 open_menu(&shared_state, &builder, event.position, window, cx);
             }
@@ -479,6 +494,8 @@ fn open_menu(
             });
             let trigger_focus_handle = shared_state.borrow().trigger_focus_handle.clone();
             menu.update(cx, |menu, cx| {
+                // The menu hangs below and right of the pointer.
+                menu.entrance = Some(Placement::Bottom);
                 menu.set_trigger_focus(trigger_focus_handle, cx);
                 menu.set_previous_focus(previous_focus_handle, cx);
             });
@@ -543,7 +560,7 @@ mod tests {
         Context, FocusHandle, IntoElement, KeyBinding, Render, TestAppContext, VisualTestContext,
         actions, point, px,
     };
-    use std::cell::Cell;
+    use std::{cell::Cell, time::Duration};
 
     actions!(context_menu_test, [RemoveTab, CopyText]);
 
@@ -865,6 +882,139 @@ mod tests {
         assert!(
             cx.debug_bounds("kbd:ctrl-c").is_some(),
             "the shortcut hint must be painted on the same frame as its item"
+        );
+    }
+
+    /// A menu whose motion can be followed through marked items: one in the
+    /// menu, and one in a submenu that the first item opens.
+    struct MotionRoot;
+
+    impl Render for MotionRoot {
+        fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+            div()
+                .id("area")
+                .size_full()
+                .context_menu(|menu, window, cx| {
+                    menu.submenu("More", window, cx, |menu, _, _| {
+                        menu.item(PopupMenuItem::element(|_, _| marker("submenu-item")))
+                    })
+                    .item(PopupMenuItem::element(|_, _| marker("menu-item")))
+                })
+        }
+    }
+
+    fn marker(name: &'static str) -> impl IntoElement {
+        div()
+            .debug_selector(move || name.into())
+            .w(px(80.))
+            .h(px(20.))
+    }
+
+    fn motion_window(cx: &mut TestAppContext) -> &mut VisualTestContext {
+        cx.update(|cx| {
+            crate::init(cx);
+            cx.set_reduce_motion(false);
+        });
+        let (_, cx) = cx.add_window_view(|_, _| MotionRoot);
+        redraw(cx);
+        cx
+    }
+
+    fn redraw(cx: &mut VisualTestContext) {
+        cx.update(|window, cx| crate::test_redraw(window, cx));
+    }
+
+    fn open_at(position: Point<Pixels>, cx: &mut VisualTestContext) {
+        cx.simulate_mouse_down(position, MouseButton::Right, Default::default());
+        cx.simulate_mouse_up(position, MouseButton::Right, Default::default());
+        cx.run_until_parked();
+        redraw(cx);
+    }
+
+    fn origin(name: &'static str, cx: &mut VisualTestContext) -> Point<Pixels> {
+        cx.debug_bounds(name)
+            .unwrap_or_else(|| panic!("{name} is not drawn"))
+            .origin
+    }
+
+    /// The pattern of `the_enter_motion_starts_over_every_time_the_dropdown_opens`,
+    /// for a menu opened at the pointer: each open slides down from the press,
+    /// the open menu re-rendering does not replay it, and where it settles is
+    /// where reduced motion shows it from the first frame.
+    #[gpui::test]
+    fn the_enter_motion_starts_over_every_time_the_context_menu_opens(cx: &mut TestAppContext) {
+        let executor = cx.executor();
+        let cx = motion_window(cx);
+        let press = point(px(40.), px(40.));
+
+        open_at(press, cx);
+        let opening = origin("menu-item", cx);
+        // The animation runs on the test clock, so settling is stepped.
+        executor.advance_clock(Duration::from_secs(1));
+        redraw(cx);
+        let settled = origin("menu-item", cx);
+        assert!(
+            opening.y < settled.y && opening.x == settled.x,
+            "the menu should slide down from the pointer, from {opening:?} to {settled:?}",
+        );
+
+        // Hovering an item re-renders the menu.
+        cx.simulate_mouse_move(settled + point(px(4.), px(4.)), None, Default::default());
+        redraw(cx);
+        assert_eq!(
+            origin("menu-item", cx),
+            settled,
+            "re-rendering the open menu must not replay its entrance"
+        );
+
+        cx.simulate_keystrokes("escape");
+        redraw(cx);
+        assert!(cx.debug_bounds("menu-item").is_none());
+        open_at(press, cx);
+        let reopening = origin("menu-item", cx);
+        assert!(
+            reopening.y < settled.y,
+            "reopening should start the motion over at {opening:?} rather than showing a \
+             settled menu, but the first frame was already at {reopening:?}",
+        );
+
+        cx.simulate_keystrokes("escape");
+        cx.update(|_, cx| cx.set_reduce_motion(true));
+        redraw(cx);
+        open_at(press, cx);
+        assert_eq!(
+            origin("menu-item", cx),
+            settled,
+            "reduced motion should show the menu at its resting place"
+        );
+    }
+
+    #[gpui::test]
+    fn a_submenu_slides_in_beside_its_parent_without_replaying_the_parent(cx: &mut TestAppContext) {
+        let executor = cx.executor();
+        let cx = motion_window(cx);
+        open_at(point(px(40.), px(40.)), cx);
+        executor.advance_clock(Duration::from_secs(1));
+        redraw(cx);
+        let parent = origin("menu-item", cx);
+
+        // Selecting "More" opens its submenu.
+        cx.simulate_keystrokes("down");
+        redraw(cx);
+        let opening = origin("submenu-item", cx);
+        assert_eq!(
+            origin("menu-item", cx),
+            parent,
+            "opening a submenu must not replay its parent's entrance"
+        );
+
+        executor.advance_clock(Duration::from_secs(1));
+        redraw(cx);
+        let settled = origin("submenu-item", cx);
+        assert!(
+            opening.x < settled.x && opening.y == settled.y,
+            "a submenu on the parent's right should slide right into place, \
+             from {opening:?} to {settled:?}",
         );
     }
 }

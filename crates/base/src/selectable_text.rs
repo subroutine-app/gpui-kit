@@ -1,9 +1,9 @@
 use std::ops::Range;
 
 use gpui::{
-    App, BorderStyle, Bounds, Corners, Edges, Element, ElementId, GlobalElementId, Hitbox,
-    HitboxBehavior, Hsla, InspectorElementId, IntoElement, LayoutId, PaintQuad, Pixels, Point,
-    SharedString, StyledText, TextStyleRefinement, Window, transparent_black,
+    App, BorderStyle, Bounds, Corners, Edges, Element, ElementId, GlobalElementId, HighlightStyle,
+    Hitbox, HitboxBehavior, Hsla, InspectorElementId, IntoElement, LayoutId, PaintQuad, Pixels,
+    Point, SharedString, StyledText, TextLayout, TextStyleRefinement, Window, transparent_black,
 };
 
 use crate::{TextSelectionHandle, TextSelectionRegistration, TextSelectionRun};
@@ -72,12 +72,30 @@ impl SelectableText {
         self
     }
 
-    fn paint_selection(
-        layout: &gpui::TextLayout,
-        range: Range<usize>,
-        color: Hsla,
-        window: &mut Window,
-    ) {
+    /// Highlights ranges without changing selection or copied text.
+    ///
+    /// Ranges are UTF-8 byte offsets, ordered and non-overlapping, with both
+    /// endpoints on character boundaries. A later call replaces the highlights.
+    pub fn highlights(
+        mut self,
+        highlights: impl IntoIterator<Item = (Range<usize>, HighlightStyle)>,
+    ) -> Self {
+        self.styled_text = self.styled_text.with_highlights(highlights);
+        self
+    }
+
+    /// The layout the text is drawn with, for finding where a byte offset is
+    /// drawn, and so which line holds it, without shaping the text again.
+    ///
+    /// The layout fills in as the element is laid out and prepainted. Read it
+    /// from the `prepaint` or `paint` of an element that wraps this one, or
+    /// keep a clone and read it after the frame. Its position methods panic
+    /// before the first prepaint.
+    pub fn layout(&self) -> &TextLayout {
+        self.styled_text.layout()
+    }
+
+    fn paint_selection(layout: &TextLayout, range: Range<usize>, color: Hsla, window: &mut Window) {
         let (Some(start), Some(end)) = (
             layout.position_for_index(range.start),
             layout.position_for_index(range.end),
@@ -238,11 +256,14 @@ impl Element for SelectableText {
 
 #[cfg(test)]
 mod tests {
-    use std::{cell::Cell, rc::Rc};
+    use std::{
+        cell::{Cell, RefCell},
+        rc::Rc,
+    };
 
     use gpui::{
-        Bounds, Context, IntoElement, Modifiers, MouseButton, ParentElement as _, Render,
-        Styled as _, TestAppContext, Window, div, point, px, size,
+        Bounds, Context, InteractiveElement as _, IntoElement, Modifiers, MouseButton,
+        ParentElement as _, Render, Styled as _, TestAppContext, Window, div, point, px, size,
     };
 
     use super::SelectableText;
@@ -342,6 +363,174 @@ mod tests {
         });
 
         assert_eq!(copies.get(), 0);
+    }
+
+    /// A right-click on selectable text asks the application's handler for
+    /// its menu when it is let go, with the selection as it was, and a press
+    /// on a menu that registered its bounds keeps the selection. A control
+    /// that takes the press opens no menu.
+    #[gpui::test]
+    fn a_right_click_asks_for_the_menu_and_keeps_the_selection(cx: &mut TestAppContext) {
+        let requests: Rc<RefCell<Vec<crate::TextSelectionMenuRequest>>> = Rc::default();
+        cx.update(|cx| {
+            crate::init(cx);
+            let requests = requests.clone();
+            TextSelection::on_context_menu(
+                move |request, _, _| requests.borrow_mut().push(request.clone()),
+                cx,
+            );
+        });
+        let (_, cx) = cx.add_window_view(|_, _| SelectableTextTestView);
+        cx.update(|window, cx| {
+            let _ = window.draw(cx);
+        });
+        cx.simulate_mouse_down(
+            point(px(1.), px(12.)),
+            MouseButton::Left,
+            Modifiers::default(),
+        );
+        cx.simulate_mouse_move(
+            point(px(220.), px(12.)),
+            Some(MouseButton::Left),
+            Modifiers::default(),
+        );
+        cx.simulate_mouse_up(
+            point(px(220.), px(12.)),
+            MouseButton::Left,
+            Modifiers::default(),
+        );
+        cx.update(|window, cx| {
+            let _ = window.draw(cx);
+        });
+
+        let position = point(px(20.), px(12.));
+        cx.simulate_mouse_down(position, MouseButton::Right, Modifiers::default());
+        assert!(requests.borrow().is_empty(), "the menu opens on release");
+        cx.simulate_mouse_up(position, MouseButton::Right, Modifiers::default());
+        cx.run_until_parked();
+        let request = requests.borrow_mut().pop().expect("the menu was asked for");
+        assert_eq!(request.position(), position);
+        assert_eq!(request.selected_text().as_ref(), "alpha beta");
+        assert!(request.has_selection());
+        assert!(!request.supports_select_all());
+
+        cx.update(|window, cx| {
+            TextSelection::register_menu(Bounds::new(position, size(px(40.), px(20.))), window, cx)
+        });
+        cx.simulate_mouse_down(position, MouseButton::Left, Modifiers::default());
+        cx.simulate_mouse_up(position, MouseButton::Left, Modifiers::default());
+        cx.update(|window, cx| {
+            assert_eq!(TextSelection::selected_text(window, cx), "alpha beta");
+            let _ = window.draw(cx);
+        });
+
+        // A control under the pointer that takes the press.
+        struct Claimed;
+        impl Render for Claimed {
+            fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+                div().size_full().child(TextSelectionLayer).child(
+                    div()
+                        .w(px(240.))
+                        .h(px(32.))
+                        .on_mouse_down(MouseButton::Right, |_, _, cx| {
+                            crate::GlobalState::suppress_text_selection(cx)
+                        })
+                        .child(SelectableText::new("claimed", "alpha beta")),
+                )
+            }
+        }
+        let (_, cx) = cx.add_window_view(|_, _| Claimed);
+        cx.update(|window, cx| {
+            let _ = window.draw(cx);
+        });
+        cx.simulate_mouse_down(position, MouseButton::Right, Modifiers::default());
+        cx.simulate_mouse_up(position, MouseButton::Right, Modifiers::default());
+        cx.run_until_parked();
+        assert!(requests.borrow().is_empty());
+    }
+
+    #[gpui::test]
+    fn highlighted_text_keeps_unicode_selection(cx: &mut TestAppContext) {
+        struct HighlightedText;
+        impl Render for HighlightedText {
+            fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+                div().size_full().child(TextSelectionLayer).child(
+                    SelectableText::new("highlighted", "alpha 中文 beta").highlights([
+                        (
+                            0..5,
+                            gpui::HighlightStyle {
+                                font_weight: Some(gpui::FontWeight::BOLD),
+                                ..Default::default()
+                            },
+                        ),
+                        (
+                            6..12,
+                            gpui::HighlightStyle {
+                                font_style: Some(gpui::FontStyle::Italic),
+                                ..Default::default()
+                            },
+                        ),
+                    ]),
+                )
+            }
+        }
+        let (_, cx) = cx.add_window_view(|_, _| HighlightedText);
+        cx.update(|window, cx| {
+            let _ = window.draw(cx);
+        });
+        cx.simulate_mouse_down(
+            point(px(0.), px(12.)),
+            MouseButton::Left,
+            Modifiers::default(),
+        );
+        cx.simulate_mouse_move(
+            point(px(300.), px(12.)),
+            Some(MouseButton::Left),
+            Modifiers::default(),
+        );
+        cx.simulate_mouse_up(
+            point(px(300.), px(12.)),
+            MouseButton::Left,
+            Modifiers::default(),
+        );
+        cx.update(|window, cx| {
+            let _ = window.draw(cx);
+            assert_eq!(TextSelection::selected_text(window, cx), "alpha 中文 beta");
+        });
+    }
+
+    #[gpui::test]
+    fn layout_finds_the_line_of_an_offset_in_wrapped_text(cx: &mut TestAppContext) {
+        struct Wrapped(Rc<RefCell<Option<gpui::TextLayout>>>);
+        impl Render for Wrapped {
+            fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+                let text = SelectableText::new("wrapped", "alpha beta gamma delta");
+                *self.0.borrow_mut() = Some(text.layout().clone());
+                div()
+                    .size_full()
+                    .child(TextSelectionLayer)
+                    .child(div().w(px(60.)).child(text))
+            }
+        }
+
+        let layout = Rc::new(RefCell::new(None));
+        let (_, cx) = cx.add_window_view({
+            let layout = layout.clone();
+            move |_, _| Wrapped(layout)
+        });
+        cx.update(|window, cx| {
+            let _ = window.draw(cx);
+        });
+
+        let layout = layout.borrow().clone().unwrap();
+        let first = layout.position_for_index(0).unwrap();
+        let delta = layout
+            .position_for_index("alpha beta gamma ".len())
+            .unwrap();
+        assert!(
+            delta.y >= first.y + layout.line_height(),
+            "\"delta\" wraps below the first line, at {delta:?}"
+        );
     }
 
     #[test]

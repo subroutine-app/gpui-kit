@@ -4,7 +4,10 @@ use gpui::{
     App, BoxShadow, Corners, Edges, Hsla, InteractiveElement as _, ParentElement, Pixels,
     StyleRefinement, Styled, Window, div, hsla, prelude::FluentBuilder as _, px,
 };
-pub use gpui_base::{FocusableExt, RoleOverride, StyledExt, box_shadow, h_flex, v_flex};
+pub use gpui_base::{
+    FocusableExt, RoleOverride, StyledExt, box_shadow, concentric_radius, enclosing_radius, h_flex,
+    nested_radius, v_flex,
+};
 
 use crate::ActiveTheme as _;
 
@@ -164,6 +167,16 @@ pub trait ThemeStyled: Styled + Sized {
     fn rounded_full_style(self, cx: &App) -> Self {
         self.rounded(cx.theme().radius_full())
     }
+
+    /// Round this row or tile to follow a parent of radius `outer` when its
+    /// edge is `inset` away from the parent's edge, and never less than the
+    /// minimum a nested shape gets. See [`nested_radius`].
+    ///
+    /// Use [`concentric_radius`] with `rounded` for a shape that must meet its
+    /// parent exactly, such as a segmented tab.
+    fn rounded_inside(self, outer: Pixels, inset: Pixels) -> Self {
+        self.rounded(nested_radius(outer, inset))
+    }
 }
 
 impl<T: Styled + Sized> ThemeStyled for T {
@@ -279,7 +292,7 @@ pub(crate) fn focus_style<T: Styled + ParentElement>(
     // Shrinking or growing the box by `inset` keeps the line concentric with
     // the element's own corners.
     let radius =
-        corner_radii(element.style(), rem_size).map(|value| (*value - inset).max(Pixels::ZERO));
+        corner_radii(element.style(), rem_size).map(|value| concentric_radius(*value, inset));
     element.child(
         div()
             .when(cfg!(test), |this| {
@@ -305,7 +318,8 @@ pub(crate) fn focus_ring<T: Styled + ParentElement>(
 ) -> T {
     let rem_size = window.rem_size();
     let border_widths = border_widths(element.style(), rem_size);
-    let radius = corner_radii(element.style(), rem_size).map(|value| *value + FOCUS_RING_WIDTH);
+    let radius = corner_radii(element.style(), rem_size)
+        .map(|value| enclosing_radius(*value, FOCUS_RING_WIDTH));
     let ring_style = corner_radii_refinement(radius);
     let inset = FOCUS_RING_WIDTH;
 
@@ -324,4 +338,23 @@ pub(crate) fn focus_ring<T: Styled + ParentElement>(
             .border_color(color)
             .refine_style(&ring_style),
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn rounded_inside_rounds_to_the_nested_radius() {
+        let radius = |outer, inset| {
+            let mut element = div().rounded_inside(px(outer), px(inset));
+            element.style().corner_radii.top_left
+        };
+
+        assert_eq!(radius(8., 4.), Some(px(4.).into()));
+        assert_eq!(radius(8., 5.), Some(px(3.).into()));
+        assert_eq!(radius(6., 4.), Some(px(3.).into()));
+        assert_eq!(radius(6., 9.), Some(px(3.).into()));
+        assert_eq!(radius(0., 4.), Some(px(0.).into()));
+    }
 }

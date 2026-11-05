@@ -1,5 +1,6 @@
 mod clear_button;
 mod content_type;
+mod context_menu;
 mod input;
 mod token;
 pub use gpui_base::input::{
@@ -17,6 +18,7 @@ mod syntax_context;
 
 pub(crate) use clear_button::*;
 pub use content_type::*;
+pub use context_menu::ContextMenuStyle;
 #[cfg(not(feature = "tree-sitter"))]
 pub struct Tree;
 pub use gpui_base::input::CursorBlink;
@@ -38,9 +40,10 @@ pub use gpui_base::input::{
     PrepaintCaretGeometry, RangeDecoration, RangeDecorationCollection, RangeDecorationStyle, Redo,
     Replace, Rope, RopeExt, RopeLines, Search, SelectAll, SelectToEnd, SelectToEndOfLine,
     SelectToNextWordEnd, SelectToPreviousWordStart, SelectToStart, SelectToStartOfLine, Selection,
-    ShowCharacterPalette, ShowCompletions, ShowDocumentHandler, TabSize, TextDecoration,
-    TextDecorationCollection, TextareaState, ToggleCodeActions, Undo, WrappingIndent,
-    highlight_characters, highlight_contains, highlight_prefix,
+    ShowCharacterPalette, ShowCompletions, ShowContextMenu, ShowDocumentHandler,
+    SmoothCaretOptions, SubmitKey, TabSize, TextDecoration, TextDecorationCollection,
+    TextareaState, ToggleCodeActions, Undo, WrappingIndent, app_smooth_caret, highlight_characters,
+    highlight_contains, highlight_prefix, set_app_smooth_caret,
 };
 pub use gpui_base::input::{EditorMode, InputMode, InputModeKind, TextareaMode};
 #[doc(hidden)]

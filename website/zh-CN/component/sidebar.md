@@ -78,6 +78,20 @@ SidebarToggleButton::new()
     })
 ```
 
+### 折叠过渡
+
+Sidebar 在两种宽度之间切换时，会在 200 ms 内平滑过渡。`transition_duration` 可以修改时长，`Duration::ZERO` 表示在一帧内直接切换。
+
+```rust
+use std::time::Duration;
+
+Sidebar::new("sidebar")
+    .collapsed(collapsed)
+    .transition_duration(Duration::ZERO)
+```
+
+如果 Sidebar 切换得很频繁，旁边的内容（例如阅读区）又会随它的宽度重新排版，建议直接切换：平滑过渡的每一帧都要重新排版这些内容。
+
 ### 嵌套菜单
 
 ```rust
@@ -157,6 +171,39 @@ Sidebar::new()
             .p_4()
             .rounded(cx.theme().radius)
             .child("Custom Styled Sidebar")
+    )
+```
+
+## 键盘
+
+每个 `SidebarMenu` 只占一个 Tab 停靠点。Tab 和 Shift-Tab 会落在活动项上，没有活动项时落在第一个可用项上。方向键按显示顺序在各项之间移动焦点，已展开子菜单中的项也包括在内。
+
+| 按键 | 行为 |
+| --- | --- |
+| `↑` / `↓` | 将焦点移到上一个 / 下一个可用项，到两端时环绕 |
+| `Home` / `End` | 将焦点移到第一个 / 最后一个可用项 |
+| `→` | 展开获得焦点的项的子菜单，已展开时进入子菜单 |
+| `←` | 收起获得焦点的项已展开的子菜单，未展开时移到父项 |
+| `Enter` / `Space` | 执行获得焦点的项的 `on_click` |
+| `Tab` | 离开菜单 |
+
+禁用的项会被跳过。用指针点击某项也会让它获得焦点，只有键盘焦点才显示焦点环。比窗口更高的 Sidebar 会在某项通过键盘获得焦点时滚动到它，滚动距离以刚好让它进入视野为限。该项已在视野内时不会滚动，焦点停留在该项期间也不会干预滚轮和滚动条。
+
+位于 `Sidebar` 之外、放在应用自己的可滚动元素中的 `SidebarMenu`，传入该元素的 `ScrollHandle` 后也会这样滚动。菜单可以位于该元素内的任意位置。
+
+```rust
+use gpui_kit::component::sidebar::SidebarItem as _;
+
+div()
+    .id("nav")
+    .h(px(300.))
+    .overflow_y_scroll()
+    .track_scroll(&self.scroll_handle)
+    .child(
+        SidebarMenu::new()
+            .track_scroll(&self.scroll_handle)
+            .children(items)
+            .render("menu", window, cx),
     )
 ```
 

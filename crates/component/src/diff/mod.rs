@@ -510,7 +510,11 @@ fn render_diff(
     state.ensure_presentation(cx);
     let rem = window.rem_size();
     let font_size = rem * (f32::from(cx.theme().mono_font_size) / 16.);
-    let font_family = cx.theme().mono_font_family.clone();
+    let font = gpui::Font {
+        family: cx.theme().mono_font_family.clone(),
+        features: cx.theme().mono_font_features.clone(),
+        ..Default::default()
+    };
     let row_height = font_size * 1.6;
     let digits = state
         .files()
@@ -530,7 +534,7 @@ fn render_diff(
     let layout = LayoutKey::new(
         rem,
         font_size,
-        font_family.clone(),
+        font.clone(),
         mode,
         props.line_number,
         marker_lane,
@@ -544,7 +548,7 @@ fn render_diff(
             measure_code_width(
                 state.files(),
                 font_size,
-                &font_family,
+                &font,
                 gutter_width,
                 lane_width,
                 mode,
@@ -883,7 +887,7 @@ fn code_width(
 fn measure_code_width(
     files: &[DiffFile],
     font_size: Pixels,
-    family: &SharedString,
+    font: &gpui::Font,
     gutter_width: Pixels,
     lane_width: Pixels,
     mode: DiffMode,
@@ -911,10 +915,6 @@ fn measure_code_width(
             }
         }
     }
-    let font = gpui::Font {
-        family: family.clone(),
-        ..Default::default()
-    };
     let width = candidates
         .into_iter()
         .map(|(_, text)| {
@@ -1805,6 +1805,7 @@ fn code_line(
             }
         })
         .font_family(cx.theme().mono_font_family.clone())
+        .font_features(cx.theme().mono_font_features.clone())
         .text_size(code.font_size)
         .line_height(code.row_height)
         .when(changed && code.change_background, |this| {

@@ -7,6 +7,8 @@ description: Displays keyboard shortcuts with platform-specific formatting.
 
 A component for displaying keyboard shortcuts and key combinations with proper platform-specific formatting. Automatically adapts the display to match the conventions of macOS (using symbols) or Windows/Linux (using text labels).
 
+A shortcut is drawn as a key cap: a small rounded key with the whole shortcut on it, such as `Ctrl+Shift+Z` or `⇧⌘Z`, in the theme's monospace font.
+
 ## Import
 
 ```rust
@@ -75,7 +77,7 @@ Kbd::new(Keystroke::parse("pagedown").unwrap())
 ### Without Visual Styling
 
 ```rust
-// Display only the key text without the styled background
+// Display only the key text without the key cap
 Kbd::new(Keystroke::parse("cmd-s").unwrap())
     .appearance(false)
 ```
@@ -100,6 +102,8 @@ if let Some(kbd) = Kbd::binding_for_action_in(&MyAction {}, &focus_handle, windo
     // Display shortcut for focused element
 }
 ```
+
+A binding of several keystrokes in a row, such as Emacs's `ctrl-x ctrl-s`, shows a key cap for each keystroke.
 
 ## Platform Differences
 
@@ -203,16 +207,6 @@ div().child(format!("Shortcut: {}", shortcut_text))
 
 ## Styling
 
-The Kbd component uses the following default styles:
-
-- Border with theme border color
-- Muted foreground text color
-- Background with theme background color
-- Small rounded corners
-- Centered text alignment
-- Extra small font size
-- Minimal padding (0.5px vertical, 1px horizontal)
-- Minimum width of 5 units
-- Flex shrink disabled to maintain size
+The key cap shows its text in the theme's `muted.foreground` on its `muted.background`, inside an edge drawn from `muted.foreground` that is slightly heavier at the bottom, which keeps the cap visible on a menu's highlighted row too. `outline()` fills the cap with the theme's background instead. The text uses the theme's `mono_font_family` a step below extra small (`0.6875rem`), since a monospace font looks larger than the interface font at the same size; `font_family` picks another font. The corners follow the theme's radius.
 
 All styles can be customized using the `Styled` trait methods.

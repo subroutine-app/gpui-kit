@@ -37,6 +37,25 @@ div()
     })
 ```
 
+### ContextMenuLayer
+
+视图通过代码打开菜单时（例如在自己处理的按下事件、工具栏按钮或键盘命令中），只需挂载一次 `ContextMenuLayer`，再通过它在窗口坐标处打开菜单：
+
+```rust
+use gpui_kit::component::menu::{ContextMenuLayer, PopupMenuItem};
+
+let layer = cx.new(|_| ContextMenuLayer::new());
+
+// 在视图的 render 中：`.child(layer.clone())`。之后在事件处理中：
+layer.update(cx, |layer, cx| {
+    layer.open(event.position, window, cx, |menu, _, _| {
+        menu.item(PopupMenuItem::new("Rename").on_click(|_, window, cx| rename(window, cx)))
+    })
+});
+```
+
+菜单打开时获得焦点，关闭时恢复之前的焦点，并替换该 layer 正在显示的菜单。视图可以用 `is_open`、`contains` 和 `contains_focus` 忽略发往已打开菜单的指针与键盘输入；菜单关闭时 layer 会发出 `DismissEvent`。
+
 ### DropdownMenu
 
 下拉菜单通常由按钮或其它可交互元素触发：
@@ -86,6 +105,17 @@ Button::new("menu-btn")
     })
 ```
 
+下拉菜单自身的样式作用于触发器所在的布局容器。触发器的尺寸相对于父元素设置时，这个容器也需要相同的尺寸。
+例如，要让按钮的长标签在所在位置内截断，按钮和下拉菜单都需要设置 `max_w_full`：
+
+```rust
+Button::new("model")
+    .label(long_label)
+    .max_w_full()
+    .dropdown_menu(|menu, window, cx| menu.menu("Option 1", Box::new(Action1)))
+    .max_w_full()
+```
+
 ### 图标
 
 ```rust
@@ -126,6 +156,16 @@ menu.menu_with_check("Enable Feature", is_enabled, Box::new(ToggleFeature))
 ```rust
 menu.check_size(Side::Right)
     .menu_with_check("Enable Feature", is_enabled, Box::new(ToggleFeature))
+```
+
+带有自身点击处理的菜单项使用 `checkable_item` 添加，这样即使未勾选，也会向辅助技术报告其勾选状态：
+
+```rust
+menu.checkable_item(
+    PopupMenuItem::new("Show Sidebar")
+        .checked(sidebar_visible)
+        .on_click(|_, window, cx| toggle_sidebar(window, cx)),
+)
 ```
 
 ### 分隔线
@@ -426,6 +466,7 @@ Button::new("settings")
 | `Enter` / `Space` | 激活当前菜单项 |
 | `Escape` | 关闭菜单 |
 | `Tab` | 关闭菜单并聚焦下一个元素 |
+| 字母或数字 | 选中下一个以该字符开头的菜单项 |
 
 ## 最佳实践
 

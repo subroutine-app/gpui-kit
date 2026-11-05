@@ -118,6 +118,12 @@ pub struct InputEditorStyle {
     pub editor_invisible: Option<Hsla>,
     pub editor_active_line: Option<Hsla>,
     pub editor_gutter_background: Option<Hsla>,
+    /// The line between the line numbers and the text. `None` draws no line.
+    pub editor_gutter_border: Option<Hsla>,
+    /// The line numbers. `None` draws them in `muted_foreground`.
+    pub editor_line_number: Option<Hsla>,
+    /// The number of the caret's line. `None` draws it in `foreground`.
+    pub editor_active_line_number: Option<Hsla>,
     pub fold_icon_renderer: Option<FoldIconRenderer>,
 }
 
@@ -173,6 +179,9 @@ impl Default for InputEditorStyle {
             editor_invisible: None,
             editor_active_line: None,
             editor_gutter_background: None,
+            editor_gutter_border: None,
+            editor_line_number: None,
+            editor_active_line_number: None,
             fold_icon_renderer: None,
         }
     }

@@ -68,11 +68,11 @@ TextView::new(&self.reply).stream_fade(true)
 
 ### 高亮文本范围
 
-应用在文档里搜索，或者指向文档里的某处引用时，用 `set_range_highlights` 把这些范围标出来。搜索由应用负责：在视图显示的文本 `rendered_text()` 里找到范围，连同绘制用的颜色一起交回，当前结果用更醒目的颜色：
+应用在文档里搜索，或者指向文档里的某处引用时，用 `set_range_highlights` 把这些范围标出来。搜索由应用负责：在视图显示的文本 `rendered_text()` 里找到范围，连同绘制用的颜色一起交回。当前结果用更醒目的背景，并配上在这个背景上清晰可读的文字颜色，这里取主题的文字颜色和页面颜色中对比度更高的一个：
 
 ```rust
 use gpui_kit::component::{
-    ActiveTheme as _,
+    ActiveTheme as _, contrast_ratio,
     text::{RangeHighlight, RangeHighlightError, TextViewState},
 };
 
@@ -82,7 +82,15 @@ fn highlight_matches(
     current_match: usize,
     cx: &mut Context<TextViewState>,
 ) -> Result<(), RangeHighlightError> {
-    let (color, current_color) = (cx.theme().warning.opacity(0.3), cx.theme().warning);
+    let theme = cx.theme();
+    let (color, current_color) = (theme.warning.opacity(0.3), theme.warning);
+    let current_text = if contrast_ratio(theme.foreground, current_color)
+        >= contrast_ratio(theme.background, current_color)
+    {
+        theme.foreground
+    } else {
+        theme.background
+    };
     let text = state.rendered_text();
     let matches = if query.is_empty() {
         Vec::new()
@@ -90,18 +98,20 @@ fn highlight_matches(
         text.as_str().match_indices(query).collect()
     };
     let highlights = matches.into_iter().enumerate().map(|(ix, (start, found))| {
-        RangeHighlight::new(
-            start..start + found.len(),
-            if ix == current_match { current_color } else { color },
-        )
+        let range = start..start + found.len();
+        if ix == current_match {
+            RangeHighlight::new(range, current_color).with_text_color(current_text)
+        } else {
+            RangeHighlight::new(range, color)
+        }
     });
     state.set_range_highlights(highlights, cx)
 }
 ```
 
-`rendered_text()` 与纯文本复制得到的文字一致：`hello **world**` 读作 `hello world`，转义字符已经还原，标题和列表的标记不在其中。偏移量是 UTF-8 字节偏移，`str` 搜索返回的范围可以直接传入；重复出现的词组按各自的位置区分。文本在第一次读取时才会生成。
+`rendered_text()` 与纯文本复制得到的文字一致。`hello **world**` 读作 `hello world`，转义字符已经还原，标题和列表的标记不在其中，顶层块之间隔一个空行，因此复制的段落粘贴后仍然分开。列表、表格行和代码块的各行在块内仍以单个换行分隔。偏移量是 UTF-8 字节偏移，`str` 搜索返回的范围可以直接传入；重复出现的词组按各自的位置区分。文本在第一次读取时才会生成。
 
-高亮绘制在文字背后、选区之下，换行、对齐、语法颜色、链接、选择和复制都保持不变。多个高亮重叠时，后面的覆盖前面的。跨越两个块的范围在两个块里分别绘制。不属于任何块的文字不会绘制：块之间的换行、表格单元格之间的空格、自定义块、HTML 块和 inline plugin 对象。只有起点在终点之后、超出范围或不在字符边界上的范围会被拒绝，同一批的整组高亮也一并拒绝。
+高亮绘制在文字背后、选区之下，换行、对齐、语法颜色、链接、选择和复制都保持不变。用 `with_text_color` 创建的高亮还会用这个颜色绘制范围内的字形，取代它们的语法颜色和链接颜色，让文字在醒目的背景上依然清晰。下划线、删除线和文字自身的背景保持原来的颜色，文字也保持原有排版，因此颜色可以从一个结果移到下一个结果，而无需重新排版。多个高亮重叠时，后面的覆盖前面的。跨越两个块的范围在两个块里分别绘制。不属于任何块的文字不会绘制：块之间的换行、表格单元格之间的空格、自定义块、HTML 块和 inline plugin 对象。只有起点在终点之后、超出范围或不在字符边界上的范围会被拒绝，同一批的整组高亮也一并拒绝。
 
 内容变化时，高亮会跟随它所在的块，保留到这个块里文字开始变化的位置为止。流式追加的文字（无论通过 `push_str` 还是 `set_text`）不影响前面的高亮；修改某处时，修改前后的高亮都会保留。表格单元格只按位置区分，因此修改表格内部时，被修改的那一行及其后各行单元格的高亮都会失效。视图会发出通知：观察这个 state，重新在新的 `rendered_text()` 里搜索即可。请在同一次 state 更新中计算范围并调用 `set_range_highlights`，确保范围对应当前文本。属于文字本身的背景（例如 `<mark>` 和语法高亮）会覆盖在范围高亮之上（行内代码的背景在高亮之下），高亮也不会随流式文字一起淡入。HTML 视图不支持范围高亮。
 
@@ -173,6 +183,28 @@ TextView::new(&state).on_reveal(move |line, _, _| {
 在触摸屏上，长按会选中手指下的单词，手指按住不放时选区跟随手指移动。抬起手指后，选区上方会出现包含 `复制` 和 `全选` 的编辑菜单，并在选区两端各显示一个拖动 handle。拖动 handle 会移动对应的一端，另一端保持不动；`全选` 选中被按下的那个视图，其 handle 仍可继续调整结果。
 
 handle 和菜单由 [`Root`](./root.md) 为整个窗口选区绘制，因此跨多个视图的选区也能覆盖到。点击其他位置会清除它们；手指滚动内容时菜单会暂时让开。
+
+## 上下文菜单
+
+在可选择的 `TextView` 或 `SelectableText` 上右键，或者在获得焦点的 TextView 中按 Shift-F10 或 Menu 键，会打开包含 `复制` 和 `全选` 的菜单。右键无论落在哪里都会保留选区，因此 `复制` 复制的内容与 Cmd-C 或 Ctrl-C 相同：整个选区，可以跨越多个视图，段落之间隔一个空行，即使焦点在文本输入框中也是如此。没有选中任何文字时 `复制` 不可用；`全选` 选中打开菜单的那个 TextView。普通的 `SelectableText` 只提供 `复制`。
+
+这个菜单是 [`NativeMenu`](./menu.md)，在 macOS 和 Windows 上由操作系统绘制；调用 `ContextMenuStyle::set_app_default(ContextMenuStyle::Drawn, cx)` 后改为 GPUI 绘制的菜单（参见 [Input](./input.md#上下文菜单)）。按下绘制菜单中的菜单项时，选区会保留，与按下操作系统菜单时一致。文本输入框和设置了 `on_link_click` 的链接会保留自己的右键行为；在右键按下时调用 `GlobalState::suppress_text_selection` 的控件也是如此。用 `TextSelectionMenu::set_builder` 替换菜单项，它会收到一个空菜单和一个 `TextSelectionMenuTarget`；后者知道选中的文字，并能添加标准菜单项：
+
+```rust
+use gpui_kit::component::text::TextSelectionMenu;
+
+TextSelectionMenu::set_builder(
+    |menu, target, _, _| {
+        target
+            .standard_items(menu)
+            .separator()
+            .menu_with_disabled("Search the Web", !target.has_selection(), Box::new(Search))
+    },
+    cx,
+);
+```
+
+菜单为空时不显示。再次设置 builder 会替换之前的。
 
 ## 图片
 

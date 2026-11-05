@@ -4,46 +4,65 @@ use crate::{
     ActiveTheme, Icon, IconName, InteractiveElementExt as _, Sizable as _, StyledExt, h_flex,
 };
 use gpui::{
-    AnyElement, App, Background, ClickEvent, Context, Decorations, Hsla, InteractiveElement,
-    IntoElement, MouseButton, ParentElement, Pixels, Render, RenderOnce, Rgba,
+    AnyElement, App, ClickEvent, Context, Decorations, Div, Hsla, InteractiveElement, IntoElement,
+    MouseButton, ParentElement, Pixels, Render, RenderOnce, Role, Stateful,
     StatefulInteractiveElement as _, StyleRefinement, Styled, TitlebarOptions, Window,
-    WindowControlArea, WindowOptions, div, linear_color_stop, linear_gradient,
-    prelude::FluentBuilder as _, px,
+    WindowButton, WindowButtonLayout, WindowControlArea, WindowControls as PlatformWindowControls,
+    WindowOptions, div, prelude::FluentBuilder as _, px, rgb,
 };
 use gpui_base::TestSupportExt as _;
 use smallvec::SmallVec;
 
 pub const TITLE_BAR_HEIGHT: Pixels = px(34.);
-#[cfg(target_os = "macos")]
-const TITLE_BAR_LEFT_PADDING: Pixels = px(80.);
-#[cfg(not(target_os = "macos"))]
-const TITLE_BAR_LEFT_PADDING: Pixels = px(12.);
+/// Room for macOS's traffic lights at the start of the bar.
+const TRAFFIC_LIGHTS_INSET: Pixels = px(80.);
+/// The bar's leading inset everywhere else.
+const TITLE_BAR_INSET: Pixels = px(12.);
 
-fn default_title_bar_background(title_bar: Hsla, background: Hsla) -> Background {
-    let title_bar_rgb = title_bar.to_rgb();
-    let background_rgb = background.to_rgb();
-    let mixed = Hsla::from(Rgba {
-        r: title_bar_rgb.r * 0.55 + background_rgb.r * 0.45,
-        g: title_bar_rgb.g * 0.55 + background_rgb.g * 0.45,
-        b: title_bar_rgb.b * 0.55 + background_rgb.b * 0.45,
-        a: title_bar_rgb.a * 0.55 + background_rgb.a * 0.45,
-    });
+/// Windows 11 draws its caption buttons 46 px wide, the full height of the bar.
+const CAPTION_BUTTON_WIDTH: Pixels = px(46.);
+/// The size Windows draws its caption glyphs at.
+const CAPTION_GLYPH_SIZE: Pixels = px(10.);
+/// The fonts holding Windows' caption glyphs, newest first: Segoe Fluent
+/// Icons on Windows 11, Segoe MDL2 Assets on Windows 10.
+const CAPTION_GLYPH_FONTS: [&str; 2] = ["Segoe Fluent Icons", "Segoe MDL2 Assets"];
 
-    linear_gradient(
-        180.,
-        linear_color_stop(mixed, 0.),
-        linear_color_stop(title_bar, 1.),
-    )
+type CloseWindowHandler = Rc<Box<dyn Fn(&ClickEvent, &mut Window, &mut App)>>;
+
+/// The bar's leading inset: room for the traffic lights on macOS, except in
+/// full screen, where AppKit hides them.
+fn leading_inset(is_macos: bool, is_fullscreen: bool) -> Pixels {
+    if is_macos && !is_fullscreen {
+        TRAFFIC_LIGHTS_INSET
+    } else {
+        TITLE_BAR_INSET
+    }
 }
 
 /// TitleBar used to customize the appearance of the title bar.
 ///
-/// We can put some elements inside the title bar.
+/// It paints the theme's `title_bar` token: one solid color unless the theme
+/// gives it a gradient.
+///
+/// The window buttons follow the platform. macOS keeps its traffic lights,
+/// Windows gets Windows 11 caption buttons, and Linux, under client-side
+/// decorations, gets the buttons the compositor supports, on the sides and in
+/// the order the desktop's button layout gives.
+///
+/// The children fill the bar between the window buttons. A [`center`] (such
+/// as the window's title) sits in the middle of the whole bar instead, with
+/// the children before it and a [`suffix`] after it.
+///
+/// [`center`]: TitleBar::center
+/// [`suffix`]: TitleBar::suffix
 #[derive(IntoElement)]
 pub struct TitleBar {
     style: StyleRefinement,
     children: SmallVec<[AnyElement; 1]>,
-    on_close_window: Option<Rc<Box<dyn Fn(&ClickEvent, &mut Window, &mut App)>>>,
+    center: Option<AnyElement>,
+    suffix: Option<AnyElement>,
+    on_close_window: Option<CloseWindowHandler>,
+    button_layout: Option<WindowButtonLayout>,
 }
 
 impl TitleBar {
@@ -52,8 +71,36 @@ impl TitleBar {
         Self {
             style: StyleRefinement::default(),
             children: SmallVec::new(),
+            center: None,
+            suffix: None,
             on_close_window: None,
+            button_layout: None,
         }
+    }
+
+    /// Put `center` in the middle of the title bar, centered on the window's
+    /// width the way a window's title sits, whatever the window buttons and
+    /// the content on either side take.
+    ///
+    /// The content beside it stays uncovered. When one side leaves too little
+    /// room, the center moves toward the other, and when the bar runs out of
+    /// room, it narrows and is clipped. Give it `min_w_0()` so it can narrow,
+    /// and text in it `truncate()` so it ends with an ellipsis.
+    ///
+    /// With a center, the children sit between the start of the bar and the
+    /// center, and the [`suffix`](TitleBar::suffix) after it. The space around
+    /// them all still moves the window.
+    pub fn center(mut self, center: impl IntoElement) -> Self {
+        self.center = Some(center.into_any_element());
+        self
+    }
+
+    /// Put `suffix` at the end of the title bar, just before the window
+    /// buttons, such as the buttons that show or hide an application's
+    /// panels. The children fill the space before it.
+    pub fn suffix(mut self, suffix: impl IntoElement) -> Self {
+        self.suffix = Some(suffix.into_any_element());
+        self
     }
 
     /// Returns the default title bar options for compatible with the [`crate::TitleBar`].
@@ -102,113 +149,241 @@ impl TitleBar {
         }
         self
     }
+
+    /// Place the Linux window buttons as `layout` says instead of following
+    /// the desktop's button layout (GNOME's `button-layout`), for an
+    /// application that lets the user choose. Other platforms ignore it.
+    pub fn button_layout(mut self, layout: WindowButtonLayout) -> Self {
+        self.button_layout = Some(layout);
+        self
+    }
 }
 
-// The Windows control buttons have a fixed width of 35px.
-//
-// We don't need implementation the click event for the control buttons.
-// If user clicked in the bounds, the window event will be triggered.
-#[derive(IntoElement, Clone)]
-enum ControlIcon {
+/// A window button as drawn: maximize turns into restore while maximized.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Caption {
     Minimize,
-    Restore,
     Maximize,
-    Close {
-        on_close_window: Option<Rc<Box<dyn Fn(&ClickEvent, &mut Window, &mut App)>>>,
-    },
+    Restore,
+    Close,
 }
 
-impl ControlIcon {
-    fn minimize() -> Self {
-        Self::Minimize
+impl Caption {
+    fn new(button: WindowButton, is_maximized: bool) -> Self {
+        match button {
+            WindowButton::Minimize => Self::Minimize,
+            WindowButton::Maximize if is_maximized => Self::Restore,
+            WindowButton::Maximize => Self::Maximize,
+            WindowButton::Close => Self::Close,
+        }
     }
 
-    fn restore() -> Self {
-        Self::Restore
-    }
-
-    fn maximize() -> Self {
-        Self::Maximize
-    }
-
-    fn close(on_close_window: Option<Rc<Box<dyn Fn(&ClickEvent, &mut Window, &mut App)>>>) -> Self {
-        Self::Close { on_close_window }
-    }
-
-    fn id(&self) -> &'static str {
+    fn id(self) -> &'static str {
         match self {
             Self::Minimize => "minimize",
-            Self::Restore => "restore",
             Self::Maximize => "maximize",
-            Self::Close { .. } => "close",
+            Self::Restore => "restore",
+            Self::Close => "close",
         }
     }
 
-    fn icon(&self) -> IconName {
+    /// The Segoe Fluent Icons / Segoe MDL2 Assets glyph.
+    fn glyph(self) -> &'static str {
+        match self {
+            Self::Minimize => "\u{E921}",
+            Self::Maximize => "\u{E922}",
+            Self::Restore => "\u{E923}",
+            Self::Close => "\u{E8BB}",
+        }
+    }
+
+    /// The icon drawn where no caption font is installed, and on Linux.
+    fn icon(self) -> IconName {
         match self {
             Self::Minimize => IconName::WindowMinimize,
-            Self::Restore => IconName::WindowRestore,
             Self::Maximize => IconName::WindowMaximize,
-            Self::Close { .. } => IconName::WindowClose,
+            Self::Restore => IconName::WindowRestore,
+            Self::Close => IconName::WindowClose,
         }
     }
 
-    fn window_control_area(&self) -> WindowControlArea {
+    /// The accessible name. The Windows glyph is a private-use character a
+    /// screen reader could otherwise read out.
+    fn label(self) -> &'static str {
+        match self {
+            Self::Minimize => "Minimize",
+            Self::Maximize => "Maximize",
+            Self::Restore => "Restore",
+            Self::Close => "Close",
+        }
+    }
+
+    fn area(self) -> WindowControlArea {
         match self {
             Self::Minimize => WindowControlArea::Min,
-            Self::Restore | Self::Maximize => WindowControlArea::Max,
-            Self::Close { .. } => WindowControlArea::Close,
-        }
-    }
-
-    fn is_close(&self) -> bool {
-        matches!(self, Self::Close { .. })
-    }
-
-    #[inline]
-    fn hover_fg(&self, cx: &App) -> Hsla {
-        if self.is_close() {
-            cx.theme().danger_foreground
-        } else {
-            cx.theme().secondary_foreground
-        }
-    }
-
-    #[inline]
-    fn hover_bg(&self, cx: &App) -> Hsla {
-        if self.is_close() {
-            cx.theme().danger
-        } else {
-            cx.theme().secondary_hover
-        }
-    }
-
-    #[inline]
-    fn active_bg(&self, cx: &mut App) -> Hsla {
-        if self.is_close() {
-            cx.theme().danger_active
-        } else {
-            cx.theme().secondary_active
+            Self::Maximize | Self::Restore => WindowControlArea::Max,
+            Self::Close => WindowControlArea::Close,
         }
     }
 }
 
-impl RenderOnce for ControlIcon {
-    fn render(self, _: &mut Window, cx: &mut App) -> impl IntoElement {
-        let is_linux = cfg!(target_os = "linux");
-        let is_windows = cfg!(target_os = "windows");
-        let hover_fg = self.hover_fg(cx);
-        let hover_bg = self.hover_bg(cx);
-        let active_bg = self.active_bg(cx);
-        let icon = self.clone();
-        let on_close_window = match &self {
-            ControlIcon::Close { on_close_window } => on_close_window.clone(),
-            _ => None,
+/// A Windows 11 caption button's colors in each state: a subtle fill of the
+/// foreground on hover and press, the system's close red behind white on
+/// close, and dimmed glyphs while the window is inactive or the button
+/// disabled.
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct CaptionColors {
+    glyph: Hsla,
+    hover_background: Hsla,
+    hover_glyph: Hsla,
+    pressed_background: Hsla,
+    pressed_glyph: Hsla,
+}
+
+impl CaptionColors {
+    fn new(caption: Caption, foreground: Hsla, active: bool, disabled: bool) -> Self {
+        let glyph = if disabled {
+            foreground.opacity(0.3)
+        } else if active {
+            foreground
+        } else {
+            foreground.opacity(0.45)
         };
+        if caption == Caption::Close {
+            // Windows draws the close button's hover in this red whatever the
+            // theme: a platform convention, not the theme's danger color.
+            let red: Hsla = rgb(0xC42B1C).into();
+            let white: Hsla = rgb(0xFFFFFF).into();
+            Self {
+                glyph,
+                hover_background: red,
+                hover_glyph: white,
+                pressed_background: red.opacity(0.9),
+                pressed_glyph: white.opacity(0.7),
+            }
+        } else {
+            Self {
+                glyph,
+                hover_background: foreground.opacity(0.06),
+                hover_glyph: foreground,
+                pressed_background: foreground.opacity(0.04),
+                pressed_glyph: foreground.opacity(0.6),
+            }
+        }
+    }
+}
+
+/// The font that draws Windows' caption glyphs on this machine, if any.
+///
+/// Resolves just these families, once, rather than listing every installed
+/// font on the UI thread.
+fn caption_glyph_font(cx: &App) -> Option<&'static str> {
+    static FONT: std::sync::OnceLock<Option<&'static str>> = std::sync::OnceLock::new();
+    *FONT.get_or_init(|| {
+        let text_system = cx.text_system();
+        CAPTION_GLYPH_FONTS.into_iter().find(|family| {
+            // A family that isn't installed resolves to a fallback font.
+            let id = text_system.resolve_font(&gpui::font(*family));
+            text_system
+                .get_font_for_id(id)
+                .is_some_and(|font| font.family.as_ref() == *family)
+        })
+    })
+}
+
+/// A Windows 11 caption button. Windows runs it through the hit-test code its
+/// area answers, so it needs no click handler. A disabled one answers none and
+/// occludes the drag area under it.
+#[derive(IntoElement)]
+struct CaptionButton {
+    caption: Caption,
+    disabled: bool,
+}
+
+impl RenderOnce for CaptionButton {
+    fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
+        let caption = self.caption;
+        let colors = CaptionColors::new(
+            caption,
+            cx.theme().foreground,
+            window.is_window_active(),
+            self.disabled,
+        );
 
         div()
-            .id(self.id())
+            .id(caption.id())
             .test_support()
+            .role(Role::Button)
+            .aria_label(caption.label())
+            .flex()
+            .flex_shrink_0()
+            .items_center()
+            .justify_center()
+            .w(CAPTION_BUTTON_WIDTH)
+            .h_full()
+            .text_color(colors.glyph)
+            .map(|this| {
+                if self.disabled {
+                    this.occlude()
+                } else {
+                    this.window_control_area(caption.area())
+                        .hover(|style| {
+                            style
+                                .bg(colors.hover_background)
+                                .text_color(colors.hover_glyph)
+                        })
+                        .active(|style| {
+                            style
+                                .bg(colors.pressed_background)
+                                .text_color(colors.pressed_glyph)
+                        })
+                }
+            })
+            .map(|this| match caption_glyph_font(cx) {
+                Some(font) => this.child(
+                    div()
+                        .font_family(font)
+                        .text_size(CAPTION_GLYPH_SIZE)
+                        .line_height(CAPTION_GLYPH_SIZE)
+                        .child(caption.glyph()),
+                ),
+                None => this.child(Icon::new(caption.icon()).small()),
+            })
+    }
+}
+
+/// A Linux window button, drawn by the title bar under client-side decorations.
+#[derive(IntoElement)]
+struct LinuxButton {
+    button: WindowButton,
+    on_close_window: Option<CloseWindowHandler>,
+}
+
+impl RenderOnce for LinuxButton {
+    fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
+        let is_close = self.button == WindowButton::Close;
+        let (hover_fg, hover_bg, active_bg) = if is_close {
+            (
+                cx.theme().danger_foreground,
+                cx.theme().danger,
+                cx.theme().danger_active,
+            )
+        } else {
+            (
+                cx.theme().secondary_foreground,
+                cx.theme().secondary_hover,
+                cx.theme().secondary_active,
+            )
+        };
+        let caption = Caption::new(self.button, window.is_maximized());
+        let button = self.button;
+        let on_close_window = self.on_close_window;
+
+        div()
+            .id(caption.id())
+            .test_support()
+            .role(Role::Button)
+            .aria_label(caption.label())
             .flex()
             .w(TITLE_BAR_HEIGHT)
             .h_full()
@@ -219,42 +394,94 @@ impl RenderOnce for ControlIcon {
             .text_color(cx.theme().foreground)
             .hover(|style| style.bg(hover_bg).text_color(hover_fg))
             .active(|style| style.bg(active_bg).text_color(hover_fg))
-            .when(is_windows, |this| {
-                this.window_control_area(self.window_control_area())
+            .on_mouse_down(MouseButton::Left, move |_, window, cx| {
+                window.prevent_default();
+                cx.stop_propagation();
             })
-            .when(is_linux, |this| {
-                this.on_mouse_down(MouseButton::Left, move |_, window, cx| {
-                    window.prevent_default();
-                    cx.stop_propagation();
-                })
-                .on_click(move |_, window, cx| {
-                    cx.stop_propagation();
-                    match icon {
-                        Self::Minimize => window.minimize_window(),
-                        Self::Restore | Self::Maximize => window.zoom_window(),
-                        Self::Close { .. } => {
-                            if let Some(f) = on_close_window.clone() {
-                                f(&ClickEvent::default(), window, cx);
-                            } else {
-                                window.remove_window();
-                            }
-                        }
-                    }
-                })
+            .on_click(move |_, window, cx| {
+                cx.stop_propagation();
+                match button {
+                    WindowButton::Minimize => window.minimize_window(),
+                    WindowButton::Maximize => window.zoom_window(),
+                    WindowButton::Close => match on_close_window.as_ref() {
+                        Some(f) => f(&ClickEvent::default(), window, cx),
+                        None => window.remove_window(),
+                    },
+                }
             })
-            .child(Icon::new(self.icon()).small())
+            .child(Icon::new(caption.icon()).small())
     }
+}
+
+/// The Linux buttons for each side of the bar: the layout's buttons, in its
+/// order, that the compositor supports. Close is always ours to offer.
+fn linux_buttons(
+    layout: &WindowButtonLayout,
+    supported: PlatformWindowControls,
+) -> [Vec<WindowButton>; 2] {
+    let offered = |button: &WindowButton| match button {
+        WindowButton::Minimize => supported.minimize,
+        WindowButton::Maximize => supported.maximize,
+        WindowButton::Close => true,
+    };
+    [&layout.left, &layout.right].map(|side| {
+        side.iter()
+            .flatten()
+            .filter(|button| offered(button))
+            .copied()
+            .collect()
+    })
+}
+
+/// Which side of the bar a group of window buttons sits on.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum ControlsSide {
+    Start,
+    End,
 }
 
 #[derive(IntoElement)]
 struct WindowControls {
-    on_close_window: Option<Rc<Box<dyn Fn(&ClickEvent, &mut Window, &mut App)>>>,
+    side: ControlsSide,
+    on_close_window: Option<CloseWindowHandler>,
+    button_layout: Option<WindowButtonLayout>,
 }
 
 impl RenderOnce for WindowControls {
-    fn render(self, window: &mut Window, _: &mut App) -> impl IntoElement {
-        if cfg!(target_os = "macos") || cfg!(target_family = "wasm") {
-            return div().id("window-controls").test_support();
+    fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
+        let id = match self.side {
+            ControlsSide::Start => "window-controls-start",
+            ControlsSide::End => "window-controls",
+        };
+        let controls = h_flex()
+            .id(id)
+            .test_support()
+            .items_center()
+            .flex_shrink_0()
+            .h_full();
+
+        if cfg!(target_os = "windows") {
+            if self.side == ControlsSide::Start {
+                return controls;
+            }
+            let maximize = if window.is_maximized() {
+                Caption::Restore
+            } else {
+                Caption::Maximize
+            };
+            return controls
+                .child(CaptionButton {
+                    caption: Caption::Minimize,
+                    disabled: !window.is_minimizable(),
+                })
+                .child(CaptionButton {
+                    caption: maximize,
+                    disabled: !window.is_resizable(),
+                })
+                .child(CaptionButton {
+                    caption: Caption::Close,
+                    disabled: false,
+                });
         }
 
         // Under server-side decorations the window manager already renders
@@ -263,36 +490,28 @@ impl RenderOnce for WindowControls {
         // visibly two close buttons). gpui falls back to server-side
         // decorations on X11 sessions without a compositor, and a Wayland
         // compositor may grant server mode even when client mode was
-        // requested. Skip ours unless this window is actually client-side
-        // decorated, mirroring the `is_client_decorated` gating of the
-        // title bar's window-menu overlay.
-        #[cfg(target_os = "linux")]
-        if !matches!(window.window_decorations(), Decorations::Client { .. }) {
-            return div().id("window-controls").test_support();
+        // requested.
+        if !cfg!(target_os = "linux")
+            || !matches!(window.window_decorations(), Decorations::Client { .. })
+        {
+            return controls;
         }
 
+        let Some(layout) = self.button_layout.or_else(|| cx.button_layout()) else {
+            return controls;
+        };
         // The window manager declares which controls it can honor; a tiling
-        // compositor may support neither minimize nor maximize. Close is
-        // always ours to offer.
-        let supported = window.window_controls();
-
-        h_flex()
-            .id("window-controls")
-            .test_support()
-            .items_center()
-            .flex_shrink_0()
-            .h_full()
-            .when(supported.minimize, |this| {
-                this.child(ControlIcon::minimize())
-            })
-            .when(supported.maximize, |this| {
-                this.child(if window.is_maximized() {
-                    ControlIcon::restore()
-                } else {
-                    ControlIcon::maximize()
-                })
-            })
-            .child(ControlIcon::close(self.on_close_window))
+        // compositor may support neither minimize nor maximize.
+        let [start, end] = linux_buttons(&layout, window.window_controls());
+        let buttons = match self.side {
+            ControlsSide::Start => start,
+            ControlsSide::End => end,
+        };
+        let on_close_window = self.on_close_window;
+        controls.children(buttons.into_iter().map(|button| LinuxButton {
+            button,
+            on_close_window: on_close_window.clone(),
+        }))
     }
 }
 
@@ -306,6 +525,28 @@ impl ParentElement for TitleBar {
     fn extend(&mut self, elements: impl IntoIterator<Item = AnyElement>) {
         self.children.extend(elements);
     }
+}
+
+/// A stretch of the bar that moves the window. It is a drag area, which
+/// Windows answers as its caption, and under client-side decorations on Linux
+/// a right click there opens the window menu. Window buttons stay out of it,
+/// since the first control area hit wins.
+fn drag_region(id: &'static str, is_web: bool, has_window_menu: bool) -> Stateful<Div> {
+    h_flex().id(id).h_full().when(!is_web, |this| {
+        this.window_control_area(WindowControlArea::Drag)
+            .when(has_window_menu, |this| {
+                this.child(
+                    div()
+                        .top_0()
+                        .left_0()
+                        .absolute()
+                        .size_full()
+                        .on_mouse_down(MouseButton::Right, move |ev, window, _| {
+                            window.show_window_menu(ev.position)
+                        }),
+                )
+            })
+    })
 }
 
 struct TitleBarState {
@@ -327,6 +568,42 @@ impl RenderOnce for TitleBar {
         let is_macos = cfg!(target_os = "macos");
 
         let state = window.use_state(cx, |_, _| TitleBarState { should_move: false });
+        if is_linux {
+            window.use_keyed_state("title-bar-button-layout", cx, |window, _| {
+                window.observe_button_layout_changed(|window, _| window.refresh())
+            });
+        }
+        // Buttons at the start sit at the window's edge, where the desktop
+        // puts them, in place of the leading inset.
+        let has_start_buttons = is_linux
+            && is_client_decorated
+            && self
+                .button_layout
+                .or_else(|| cx.button_layout())
+                .is_some_and(|layout| {
+                    let [start, _] = linux_buttons(&layout, window.window_controls());
+                    !start.is_empty()
+                });
+        let has_window_menu = is_linux && is_client_decorated;
+        let inset = leading_inset(is_macos, window.is_fullscreen());
+
+        let start_controls = has_start_buttons.then(|| WindowControls {
+            side: ControlsSide::Start,
+            on_close_window: self.on_close_window.clone(),
+            button_layout: self.button_layout,
+        });
+        let end_controls = WindowControls {
+            side: ControlsSide::End,
+            on_close_window: self.on_close_window,
+            button_layout: self.button_layout,
+        };
+        let bar = drag_region("bar", is_web, has_window_menu)
+            .justify_between()
+            .flex_shrink_0()
+            .flex_1()
+            .when(has_start_buttons, |this| this.pl_2())
+            .children(self.children);
+        let has_slots = self.center.is_some() || self.suffix.is_some();
 
         div().flex_shrink_0().child(
             div()
@@ -336,13 +613,10 @@ impl RenderOnce for TitleBar {
                 .items_center()
                 .justify_between()
                 .h(TITLE_BAR_HEIGHT)
-                .pl(TITLE_BAR_LEFT_PADDING)
+                .when(!has_slots && !has_start_buttons, |this| this.pl(inset))
                 .border_b_1()
                 .border_color(cx.theme().title_bar_border)
-                .bg(default_title_bar_background(
-                    cx.theme().title_bar,
-                    cx.theme().background,
-                ))
+                .bg(cx.theme().tokens.title_bar)
                 .refine_style(&self.style)
                 .when(is_linux, |this| {
                     this.on_double_click(|_, window, _| window.zoom_window())
@@ -373,37 +647,58 @@ impl RenderOnce for TitleBar {
                         window.start_window_move();
                     }
                 }))
-                .child(
-                    h_flex()
-                        .id("bar")
-                        .h_full()
-                        .justify_between()
-                        .flex_shrink_0()
-                        .flex_1()
-                        .when(!is_web, |this| {
-                            this.window_control_area(WindowControlArea::Drag)
-                                .when(window.is_fullscreen(), |this| this.pl_3())
-                                .when(is_linux && is_client_decorated, |this| {
-                                    this.child(
-                                        div()
-                                            .top_0()
-                                            .left_0()
-                                            .absolute()
-                                            .size_full()
-                                            .h_full()
-                                            .on_mouse_down(
-                                                MouseButton::Right,
-                                                move |ev, window, _| {
-                                                    window.show_window_menu(ev.position)
-                                                },
-                                            ),
-                                    )
-                                })
-                        })
-                        .children(self.children),
-                )
-                .child(WindowControls {
-                    on_close_window: self.on_close_window,
+                .map(|this| {
+                    if !has_slots {
+                        return this.children(start_controls).child(bar).child(end_controls);
+                    }
+                    // Three columns. The sides share the room the center
+                    // leaves equally, which centers it on the bar, but neither
+                    // gets less than its content, which moves the center
+                    // toward the roomier side. Only the center narrows when
+                    // the sides fill the bar. Padding on a side would count
+                    // toward its share, so the leading inset is a spacer.
+                    let has_center = self.center.is_some();
+                    this.child(
+                        h_flex()
+                            .h_full()
+                            .flex_1()
+                            .when(!has_start_buttons, |this| {
+                                this.child(div().flex_none().w(inset).h_full())
+                            })
+                            .children(start_controls)
+                            .child(bar),
+                    )
+                    .when_some(self.center, |this, center| {
+                        this.child(
+                            drag_region("bar-center", is_web, has_window_menu)
+                                .min_w_0()
+                                // Sets the center apart from the content
+                                // beside it when it moves aside, and leaves
+                                // room for a focus ring the clip would cut.
+                                .px_4()
+                                .overflow_hidden()
+                                .justify_center()
+                                .child(center),
+                        )
+                    })
+                    .child(
+                        h_flex()
+                            .h_full()
+                            .map(|this| {
+                                if has_center {
+                                    this.flex_1()
+                                } else {
+                                    this.flex_none()
+                                }
+                            })
+                            .child(
+                                drag_region("bar-end", is_web, has_window_menu)
+                                    .flex_1()
+                                    .justify_end()
+                                    .children(self.suffix),
+                            )
+                            .child(end_controls),
+                    )
                 }),
         )
     }
@@ -412,28 +707,251 @@ impl RenderOnce for TitleBar {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use gpui::{Rgba, linear_color_stop, linear_gradient};
 
     #[test]
-    fn test_default_title_bar_background() {
-        let title_bar = Hsla::black();
-        let background = Hsla::white();
+    fn the_traffic_lights_inset_drops_in_full_screen() {
+        assert_eq!(leading_inset(true, false), TRAFFIC_LIGHTS_INSET);
+        assert_eq!(leading_inset(true, true), TITLE_BAR_INSET);
+        assert_eq!(leading_inset(false, false), TITLE_BAR_INSET);
+        assert_eq!(leading_inset(false, true), TITLE_BAR_INSET);
+    }
 
+    #[test]
+    fn linux_buttons_follow_the_layout_and_what_the_compositor_supports() {
+        let layout = WindowButtonLayout {
+            left: [
+                Some(WindowButton::Close),
+                Some(WindowButton::Minimize),
+                None,
+            ],
+            right: [Some(WindowButton::Maximize), None, None],
+        };
+        let all = PlatformWindowControls::default();
         assert_eq!(
-            default_title_bar_background(title_bar, background),
-            linear_gradient(
-                180.,
-                linear_color_stop(
-                    Hsla::from(Rgba {
-                        r: 0.45,
-                        g: 0.45,
-                        b: 0.45,
-                        a: 1.,
-                    }),
-                    0.,
-                ),
-                linear_color_stop(title_bar, 1.),
-            )
+            linux_buttons(&layout, all),
+            [
+                vec![WindowButton::Close, WindowButton::Minimize],
+                vec![WindowButton::Maximize]
+            ]
         );
+        // A tiling compositor that offers neither keeps only close.
+        let tiling = PlatformWindowControls {
+            minimize: false,
+            maximize: false,
+            ..all
+        };
+        assert_eq!(
+            linux_buttons(&layout, tiling),
+            [vec![WindowButton::Close], vec![]]
+        );
+    }
+
+    #[test]
+    fn caption_buttons_dim_while_inactive_or_disabled_and_close_turns_red() {
+        let foreground: Hsla = rgb(0x1a1a1a).into();
+        let active = CaptionColors::new(Caption::Minimize, foreground, true, false);
+        let inactive = CaptionColors::new(Caption::Minimize, foreground, false, false);
+        let disabled = CaptionColors::new(Caption::Maximize, foreground, true, true);
+        assert_eq!(active.glyph, foreground);
+        assert!(inactive.glyph.a < active.glyph.a);
+        assert!(disabled.glyph.a < inactive.glyph.a);
+        assert!(active.hover_background.a < 0.1, "a subtle fill");
+
+        let close = CaptionColors::new(Caption::Close, foreground, true, false);
+        assert_eq!(close.hover_background, rgb(0xC42B1C).into());
+        assert_eq!(close.hover_glyph, rgb(0xFFFFFF).into());
+        assert!(close.pressed_glyph.a < 1.);
+
+        assert_eq!(Caption::Close.glyph(), "\u{E8BB}");
+        assert_eq!(Caption::Restore.area(), WindowControlArea::Max);
+        assert_eq!(Caption::new(WindowButton::Maximize, true), Caption::Restore);
+    }
+
+    /// Every window button is a button named for what it does, so a screen
+    /// reader says "Minimize" rather than a private-use glyph.
+    #[gpui::test]
+    fn window_buttons_are_named_buttons(cx: &mut gpui::TestAppContext) {
+        use gpui::{Element as _, accesskit};
+        cx.update(crate::init);
+        let window = cx.add_empty_window();
+        window.update(|window, cx| {
+            for (caption, name) in [
+                (Caption::Minimize, "Minimize"),
+                (Caption::Maximize, "Maximize"),
+                (Caption::Restore, "Restore"),
+                (Caption::Close, "Close"),
+            ] {
+                let element = CaptionButton {
+                    caption,
+                    disabled: false,
+                }
+                .render(window, cx)
+                .into_element();
+                assert_eq!(element.a11y_role(), Some(Role::Button));
+                let mut node = accesskit::Node::new(Role::Button);
+                element.write_a11y_info(&mut node);
+                assert_eq!(node.label(), Some(name));
+            }
+            let element = LinuxButton {
+                button: WindowButton::Close,
+                on_close_window: None,
+            }
+            .render(window, cx)
+            .into_element();
+            let mut node = accesskit::Node::new(Role::Button);
+            element.write_a11y_info(&mut node);
+            assert_eq!(node.label(), Some("Close"));
+        });
+    }
+
+    /// A title bar with fixed-width content at the start and the end, the end
+    /// as the suffix or as a second child, and a center that may narrow, as a
+    /// title that truncates does.
+    #[derive(Clone, Copy, Default)]
+    struct Slots {
+        start: f32,
+        center: Option<f32>,
+        end: f32,
+        end_as_child: bool,
+    }
+
+    impl Render for Slots {
+        fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+            let item = |name: &'static str, width: f32| {
+                div()
+                    .debug_selector(move || name.into())
+                    .flex_none()
+                    .w(px(width))
+                    .h(px(20.))
+            };
+            let end = item("end", self.end);
+            TitleBar::new()
+                .child(item("start", self.start))
+                .when_some(self.center, |this, width| {
+                    this.center(item("center", width).flex_shrink(1.).min_w_0())
+                })
+                .map(|this| {
+                    if self.end_as_child {
+                        this.child(end)
+                    } else {
+                        this.suffix(end)
+                    }
+                })
+        }
+    }
+
+    /// The width the window buttons take at the end of the bar in a test
+    /// window, which has no client-side decorations.
+    fn end_controls_width() -> Pixels {
+        if cfg!(target_os = "windows") {
+            CAPTION_BUTTON_WIDTH * 3.
+        } else {
+            px(0.)
+        }
+    }
+
+    const WIDTH: Pixels = px(800.);
+
+    fn title_bar_window(
+        cx: &mut gpui::TestAppContext,
+    ) -> (gpui::Entity<Slots>, &mut gpui::VisualTestContext) {
+        cx.update(crate::init);
+        let (view, cx) = cx.add_window_view(|_, _| Slots::default());
+        cx.simulate_resize(gpui::size(WIDTH, px(100.)));
+        (view, cx)
+    }
+
+    /// The bounds of the start, the center and the end, laid out for `slots`.
+    fn lay_out(
+        cx: &mut gpui::VisualTestContext,
+        view: &gpui::Entity<Slots>,
+        slots: Slots,
+    ) -> [gpui::Bounds<Pixels>; 3] {
+        cx.update(|window, cx| {
+            view.update(cx, |this, cx| {
+                *this = slots;
+                cx.notify();
+            });
+            window.draw(cx).clear(cx);
+        });
+        ["start", "center", "end"].map(|name| cx.debug_bounds(name).unwrap_or_default())
+    }
+
+    /// The center sits in the middle of the window, moves toward the roomier
+    /// side when one side is wide, and narrows rather than cover either side.
+    #[gpui::test]
+    fn the_center_is_centered_on_the_window_and_never_covers_the_sides(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        let (view, cx) = title_bar_window(cx);
+        let inset = leading_inset(cfg!(target_os = "macos"), false);
+        let controls = end_controls_width();
+        // Reserve equal platform space on both sides. The content compensates
+        // for the actual inset and controls, so each case has the same room.
+        let reserve = inset.max(controls);
+        let width = WIDTH + reserve * 2.;
+        cx.simulate_resize(gpui::size(width, px(100.)));
+        let middle = width / 2.;
+        let slots = |start, center, end| Slots {
+            start: start + f32::from(reserve - inset),
+            center: Some(center),
+            end: end + f32::from(reserve - controls),
+            end_as_child: false,
+        };
+
+        // With room on both sides, the center is centered on the window
+        // rather than on the space between the sides.
+        let [start, center, end] = lay_out(cx, &view, slots(220., 160., 60.));
+        assert!((center.center().x - middle).abs() < px(1.), "{center:?}");
+        assert_eq!(center.size.width, px(160.));
+        assert_eq!(start.left(), inset);
+        assert_eq!(end.right(), width - controls);
+
+        // A wide start pushes the center toward the end, clear of the start.
+        let [start, center, end] = lay_out(cx, &view, slots(420., 160., 60.));
+        assert_eq!(center.size.width, px(160.));
+        assert!(center.center().x > middle, "{center:?}");
+        assert!(center.left() >= start.right(), "{start:?} {center:?}");
+        assert!(center.right() <= end.left(), "{center:?} {end:?}");
+
+        // A wide end pushes it toward the start.
+        let [start, center, end] = lay_out(cx, &view, slots(60., 160., 420.));
+        assert_eq!(center.size.width, px(160.));
+        assert!(center.center().x < middle, "{center:?}");
+        assert!(center.left() >= start.right(), "{start:?} {center:?}");
+        assert!(center.right() <= end.left(), "{center:?} {end:?}");
+
+        // Without room for all of it, the center narrows between the sides.
+        let [start, center, end] = lay_out(cx, &view, slots(300., 400., 300.));
+        assert!(center.size.width < px(400.), "{center:?}");
+        assert!(center.size.width > px(0.), "{center:?}");
+        assert!(center.left() >= start.right(), "{start:?} {center:?}");
+        assert!(center.right() <= end.left(), "{center:?} {end:?}");
+    }
+
+    /// Without a center, the children fill the bar up to the suffix, as
+    /// children alone fill it up to the window buttons.
+    #[gpui::test]
+    fn without_a_center_the_children_fill_the_bar(cx: &mut gpui::TestAppContext) {
+        let (view, cx) = title_bar_window(cx);
+        let inset = leading_inset(cfg!(target_os = "macos"), false);
+        for end_as_child in [false, true] {
+            let [start, _, end] = lay_out(
+                cx,
+                &view,
+                Slots {
+                    start: 420.,
+                    center: None,
+                    end: 60.,
+                    end_as_child,
+                },
+            );
+            assert_eq!(start.left(), inset, "end_as_child: {end_as_child}");
+            assert_eq!(
+                end.right(),
+                WIDTH - end_controls_width(),
+                "end_as_child: {end_as_child}"
+            );
+        }
     }
 }

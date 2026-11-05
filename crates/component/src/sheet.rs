@@ -22,6 +22,8 @@ use crate::{
 
 pub(crate) fn init(_: &mut App) {}
 
+const SHEET_TRANSITION_DURATION: Duration = Duration::from_millis(150);
+
 /// The settings for sheets.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[non_exhaustive]
@@ -53,6 +55,7 @@ pub struct Sheet {
     children: Vec<AnyElement>,
     overlay: bool,
     overlay_closable: bool,
+    transition_duration: Option<Duration>,
 }
 
 impl Sheet {
@@ -70,6 +73,7 @@ impl Sheet {
             children: Vec::new(),
             overlay: true,
             overlay_closable: true,
+            transition_duration: None,
             on_close: Rc::new(|_, _, _| {}),
         }
     }
@@ -107,6 +111,13 @@ impl Sheet {
     /// Set whether the sheet should be closable by clicking the overlay, default is `true`.
     pub fn overlay_closable(mut self, overlay_closable: bool) -> Self {
         self.overlay_closable = overlay_closable;
+        self
+    }
+
+    /// Set how long the sheet takes to slide in. `Duration::ZERO` shows it in
+    /// place at once. Defaults to 150 ms.
+    pub fn transition_duration(mut self, duration: Duration) -> Self {
+        self.transition_duration = Some(duration);
         self
     }
 
@@ -237,11 +248,17 @@ impl RenderOnce for Sheet {
                         .w_full()
                         .child(footer),
                 )
-            })
-            .with_animation(
-                "slide",
-                Animation::new(Duration::from_secs_f64(0.15)),
-                move |this, delta| {
+            });
+        let duration = self
+            .transition_duration
+            .unwrap_or(SHEET_TRANSITION_DURATION);
+        let surface = if duration.is_zero() {
+            surface
+                .text_selection_scope(selection_scope)
+                .into_any_element()
+        } else {
+            surface
+                .with_animation("slide", Animation::new(duration), move |this, delta| {
                     let y = px(-100.) + delta * px(100.);
                     this.map(|this| match placement {
                         Placement::Top => this.top(top + y),
@@ -249,9 +266,10 @@ impl RenderOnce for Sheet {
                         Placement::Bottom => this.bottom(y),
                         Placement::Left => this.left(y),
                     })
-                },
-            );
-        let surface = surface.text_selection_scope(selection_scope);
+                })
+                .text_selection_scope(selection_scope)
+                .into_any_element()
+        };
 
         BaseSheet::new(cx)
             .top(frame_insets.top)

@@ -32,9 +32,51 @@ use gpui_kit::base::{Tooltip};
 
 指针悬停或键盘聚焦后延迟显示，离开或失焦后关闭。
 
-`TooltipOverlay` 默认等待 500 ms 后显示；关闭时保留 300 ms 宽限期，期间移入另一个触发元素会立即切换。安装 `TooltipDefaults` 可在应用范围内调整这两个时长，`TooltipRequest::with_show_delay` 可覆盖单次请求的显示延迟。
+`TooltipOverlay` 默认等待 500 ms 后显示 Tooltip。有 Tooltip 显示时，以及指针离开后的 300 ms 宽限期内，指针在另一个触发元素上停留 100 ms，它的 Tooltip 就会取而代之；因此指针快速扫过一排触发元素时，已显示的 Tooltip 保持不变，不会逐个闪现。安装 `TooltipDefaults` 可在应用范围内调整显示延迟、切换延迟和宽限期，`TooltipRequest::with_show_delay` 可覆盖单次请求的显示延迟，切换延迟不会超过它。
 
 受控状态应保存在父渲染类型或 GPUI entity 中；在回调中更新并调用 `cx.notify()`，不要在每次渲染时重建持久 entity。
+
+### 让 Tooltip 跟随触发元素
+
+`TooltipOverlay` 显示一个 `TooltipRequest`。用 `TooltipRequest::for_trigger` 创建的请求只在同时绘制其触发元素的帧中绘制，因此 Tooltip 会随它所说明的元素一起消失（例如点击后关闭所在页面的按钮），仍在等待显示延迟的 Tooltip 也不会出现。构建触发元素时创建一个 `TooltipTrigger`，并在元素的 prepaint 中每帧记录它的边界：
+
+```rust
+use gpui_kit::base::{ElementExt as _, TooltipOverlay, TooltipRequest, TooltipTrigger};
+
+let trigger = TooltipTrigger::new();
+div()
+    .id("save")
+    .on_prepaint({
+        let trigger = trigger.clone();
+        move |bounds, window, _| trigger.prepaint(bounds, window)
+    })
+    .on_hover(move |hovered, window, cx| {
+        if *hovered {
+            overlay.update(cx, |overlay: &mut TooltipOverlay, cx| {
+                let request = TooltipRequest::for_trigger(&trigger, |_, cx| {
+                    cx.new(|_| SaveTooltip).into()
+                });
+                overlay.request_show(request, window, cx);
+            });
+        } else {
+            overlay.update(cx, |overlay: &mut TooltipOverlay, cx| {
+                overlay.request_hide_for(&trigger, window, cx);
+            });
+        }
+    })
+```
+
+指针离开时调用 `request_hide_for`。GPUI 可能先报告指针进入下一个触发元素，再报告它离开当前元素，这时 `request_hide` 会连下一个触发元素的 Tooltip 一起隐藏。GPUI 沿用上一帧的视图中的触发元素，只要指针停在其上，就算作已绘制；指针离开后的宽限期内，Tooltip 会一直绘制，直到宽限计时结束。请在触发元素自己的元素 ID 内调用 `prepaint`，因为触发元素的状态保存在这个 ID 之下。
+
+`TooltipRequest::new` 则把请求锚定在固定边界上：Tooltip 会一直显示，直到被隐藏；用这种方式发出的新请求会立即取代它。
+
+### 打开的浮层的触发元素内
+
+`Popup` 用 `prepaint_popup_trigger` 对触发元素执行 prepaint，因此在显示内容期间，触发元素内的 Tooltip 触发元素都不会显示 Tooltip，其中某个已经显示的 Tooltip 也会隐藏。自己实现的元素若承载浮层，在触发元素的 prepaint 外层同样调用它：
+
+```rust
+gpui_kit::base::prepaint_popup_trigger(self.open, || self.trigger.prepaint(window, cx));
+```
 
 ## 完整 Rust 示例
 

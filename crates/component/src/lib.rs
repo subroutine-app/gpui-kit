@@ -48,6 +48,7 @@ pub mod diff;
 pub mod dock;
 pub mod empty;
 pub mod form;
+pub mod glass;
 pub mod grid_layout;
 pub mod group_box;
 pub mod highlighter;
@@ -136,6 +137,7 @@ pub fn init(cx: &mut App) {
     root::init(cx);
     gpui_base::init(cx);
     input::init(cx);
+    text::init(cx);
     diff::init(cx);
     date_picker::init(cx);
     dock::init(cx);
@@ -147,6 +149,7 @@ pub fn init(cx: &mut App) {
     popover::init(cx);
     questionnaire::init(cx);
     menu::init(cx);
+    sidebar::init(cx);
     table::init(cx);
     tooltip::init(cx);
 }

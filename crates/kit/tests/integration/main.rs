@@ -50,9 +50,13 @@ mod interactions;
 #[cfg(feature = "test-support")]
 mod lifecycle;
 #[cfg(all(feature = "test-support", feature = "component"))]
+mod managed_tooltip;
+#[cfg(all(feature = "test-support", feature = "component"))]
 mod menu;
 #[cfg(all(feature = "test-support", feature = "component"))]
 mod overlays;
+#[cfg(all(feature = "test-support", not(feature = "gpui-fast")))]
+mod paint_effects;
 #[cfg(all(feature = "test-support", feature = "component"))]
 mod painted_text;
 #[cfg(feature = "test-support")]
@@ -70,5 +74,10 @@ mod test_macro;
 mod text_selection;
 #[cfg(all(feature = "test-support", feature = "component"))]
 mod touch_selection;
+#[cfg(all(feature = "test-support", feature = "component"))]
+mod transitions;
 #[cfg(feature = "test-support")]
 mod window;
+// The vendored backend's additions do not exist in GPUI Fast.
+#[cfg(all(feature = "test-support", not(feature = "gpui-fast")))]
+mod vendored_gpui;

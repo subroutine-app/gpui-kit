@@ -85,6 +85,20 @@ SidebarToggleButton::new()
     })
 ```
 
+### Collapse Transition
+
+The sidebar glides between its widths over 200 ms. `transition_duration` changes that, and `Duration::ZERO` snaps in one frame.
+
+```rust
+use std::time::Duration;
+
+Sidebar::new("sidebar")
+    .collapsed(collapsed)
+    .transition_duration(Duration::ZERO)
+```
+
+Snap a sidebar that is toggled often beside content that reflows with its width, such as a reading column: a glide lays that content out again on every frame of it.
+
 ### Nested Menu Items
 
 ```rust
@@ -303,6 +317,39 @@ Sidebar::new()
                     .when(!is_mobile, |this| this.child("Full App Name"))
                     .when(is_mobile, |this| this.child(Icon::new(IconName::Menu)))
             )
+    )
+```
+
+## Keyboard
+
+Each `SidebarMenu` is one Tab stop. Tab and Shift-Tab reach it on its active item, or on its first enabled item when none is active. The arrow keys move focus through the items in the order they appear, including the items of open submenus.
+
+| Key | Behavior |
+| --- | --- |
+| `↑` / `↓` | Move focus to the previous / next enabled item, wrapping at the ends |
+| `Home` / `End` | Move focus to the first / last enabled item |
+| `→` | Open the focused item's submenu, or move into it when it's open |
+| `←` | Close the focused item's open submenu, or move to its parent item |
+| `Enter` / `Space` | Run the focused item's `on_click` |
+| `Tab` | Leave the menu |
+
+Disabled items are skipped. Pressing an item with the pointer focuses it too, and only keyboard focus shows a ring. A sidebar taller than its window scrolls to an item that takes focus from the keyboard, by the least distance that brings it into view. It doesn't scroll when the item is in view already, and it leaves the wheel and the scrollbar alone while focus stays on the item.
+
+A `SidebarMenu` outside a `Sidebar`, in a scrolling element of your own, scrolls the same way once you give it that element's `ScrollHandle`. The menu can sit anywhere inside the element.
+
+```rust
+use gpui_kit::component::sidebar::SidebarItem as _;
+
+div()
+    .id("nav")
+    .h(px(300.))
+    .overflow_y_scroll()
+    .track_scroll(&self.scroll_handle)
+    .child(
+        SidebarMenu::new()
+            .track_scroll(&self.scroll_handle)
+            .children(items)
+            .render("menu", window, cx),
     )
 ```
 

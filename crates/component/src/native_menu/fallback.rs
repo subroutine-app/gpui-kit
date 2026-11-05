@@ -4,11 +4,14 @@
 //! [`crate::Root`]. Unlike a real native menu it is clipped to the window, but it keeps
 //! the [`super::NativeMenu`] API working on every platform.
 
+use crate::Placement;
 use crate::root::WindowState;
 use gpui::{
     App, Context, DismissEvent, Entity, FocusHandle, Focusable, IntoElement, ParentElement, Pixels,
-    Point, Render, Subscription, Window, anchored, deferred, div, px,
+    Point, Render, Styled as _, Subscription, Window, anchored, canvas, deferred, div,
+    prelude::FluentBuilder as _, px,
 };
+use gpui_base::TextSelection;
 
 use crate::menu::{PopupMenu, PopupMenuItem};
 
@@ -30,11 +33,16 @@ impl FallbackMenuOverlay {
         Self { active: None }
     }
 
+    /// The menu showing, for tests.
+    #[cfg(test)]
+    pub(crate) fn active_menu(&self) -> Option<Entity<PopupMenu>> {
+        self.active.as_ref().map(|active| active.menu.clone())
+    }
+
     /// Build a [`PopupMenu`] from `items` and show it anchored at `position`.
     ///
     /// `action_context` is the focus handle the selected action is dispatched
     /// to, matching the native backends (which dispatch to the window's focus).
-    #[allow(dead_code)] // Only used where the native menu falls back (e.g. Linux).
     fn show(
         &mut self,
         items: Vec<NativeMenuItem>,
@@ -44,6 +52,7 @@ impl FallbackMenuOverlay {
         cx: &mut Context<Self>,
     ) {
         let menu = build_popup(items, action_context, window, cx);
+        menu.update(cx, |menu, _| menu.entrance = Some(Placement::Bottom));
 
         let subscription = cx.subscribe(&menu, |this, _, _: &DismissEvent, cx| {
             this.active = None;
@@ -61,7 +70,6 @@ impl FallbackMenuOverlay {
 }
 
 /// Recursively build a [`PopupMenu`] entity from native menu items.
-#[allow(dead_code)] // Only used where the native menu falls back (e.g. Linux).
 fn build_popup(
     items: Vec<NativeMenuItem>,
     action_context: Option<FocusHandle>,
@@ -117,24 +125,37 @@ fn build_popup(
 
 impl Render for FallbackMenuOverlay {
     fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
-        let mut root = div();
-        if let Some(active) = self.active.as_ref() {
-            root = root.child(
+        div().when_some(self.active.as_ref(), |this, active| {
+            this.child(
                 deferred(
                     anchored()
                         .position(active.position)
                         .snap_to_window_with_margin(px(8.))
-                        .child(active.menu.clone()),
+                        .child(
+                            // Pressing an item keeps the window's text
+                            // selection, as pressing an operating system menu
+                            // does, so the menu can act on it.
+                            div().relative().child(active.menu.clone()).child(
+                                canvas(
+                                    |bounds, window, cx| {
+                                        TextSelection::register_menu(bounds, window, cx)
+                                    },
+                                    |_, _, _, _| {},
+                                )
+                                .absolute()
+                                .top_0()
+                                .left_0()
+                                .size_full(),
+                            ),
+                        ),
                 )
                 .with_priority(gpui_base::POPUP_PRIORITY),
-            );
-        }
-        root
+            )
+        })
     }
 }
 
 /// Show the fallback popup menu through [`crate::Root`]'s overlay.
-#[allow(dead_code)] // Only called where the native menu falls back (e.g. Linux).
 pub(super) fn show(
     items: Vec<NativeMenuItem>,
     position: Point<Pixels>,

@@ -3,10 +3,15 @@ use std::rc::Rc;
 use gpui::{
     Anchor, AnyElement, App, Context, DismissEvent, Element, ElementId, Entity, FocusHandle,
     Focusable, GlobalElementId, InspectorElementId, InteractiveElement, IntoElement, LayoutId,
-    RenderOnce, SharedString, Styled, Window, prelude::FluentBuilder,
+    RenderOnce, SharedString, StyleRefinement, Styled, Window, prelude::FluentBuilder,
 };
 
-use crate::{Selectable, button::Button, menu::PopupMenu, popover::Popover};
+use crate::{
+    Selectable,
+    button::Button,
+    menu::PopupMenu,
+    popover::{Popover, anchor_side},
+};
 
 /// A dropdown menu trait for buttons and other interactive elements
 pub trait DropdownMenu: Styled + Selectable + InteractiveElement + IntoElement + 'static {
@@ -39,6 +44,7 @@ pub struct DropdownMenuPopover<T: Selectable + IntoElement + 'static> {
     trigger: T,
     builder: Rc<dyn Fn(PopupMenu, &mut Window, &mut Context<PopupMenu>) -> PopupMenu>,
     on_open_change: Option<Rc<dyn Fn(&bool, &mut Window, &mut App)>>,
+    trigger_style: StyleRefinement,
 }
 
 impl<T> DropdownMenuPopover<T>
@@ -57,6 +63,7 @@ where
             trigger,
             builder: Rc::new(builder),
             on_open_change: None,
+            trigger_style: StyleRefinement::default(),
         }
     }
 
@@ -75,6 +82,18 @@ where
     ) -> Self {
         self.on_open_change = Some(Rc::new(callback));
         self
+    }
+}
+
+/// Styles the container the trigger is laid out in, as
+/// [`Popover::trigger_style`] does. A trigger sized relative to its parent,
+/// with `w_full` or `max_w_full`, needs the same size here.
+impl<T> Styled for DropdownMenuPopover<T>
+where
+    T: Selectable + IntoElement + 'static,
+{
+    fn style(&mut self) -> &mut StyleRefinement {
+        &mut self.trigger_style
     }
 }
 
@@ -106,6 +125,7 @@ where
         cx: &mut App,
     ) -> Popover {
         let builder = self.builder.clone();
+        let entrance = anchor_side(self.anchor);
         let menu_state =
             window.use_keyed_state(self.id.clone(), cx, |_, _| DropdownMenuState::default());
 
@@ -113,6 +133,7 @@ where
             .appearance(false)
             .overlay_closable(false)
             .trigger(self.trigger)
+            .trigger_style(self.trigger_style)
             .anchor(self.anchor)
             .when_some(self.on_open_change, |this, callback| {
                 this.on_open_change(move |open, window, cx| callback(open, window, cx))
@@ -132,6 +153,7 @@ where
                             builder(menu, window, cx)
                         });
                         menu.update(cx, |menu, cx| {
+                            menu.entrance = Some(entrance);
                             menu.set_trigger_focus(Some(trigger_focus.clone()), cx)
                         });
                         menu_state.update(cx, |state, _| {

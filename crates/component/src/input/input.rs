@@ -7,6 +7,7 @@ use gpui::{
     SharedString, StyleRefinement, Styled, TextAlign, TouchPhase, Window, div, px, relative,
 };
 
+use super::ContextMenuStyle;
 use crate::button::{Button, ButtonRounded, ButtonVariants as _};
 use crate::input::clear_button;
 use crate::native_menu::NativeMenu;
@@ -21,7 +22,6 @@ use rust_i18n::t;
 
 use super::state::{TextInputState, sync_focused_input_registry};
 use super::{InputContentType, InputState, sync_native_content_type};
-use crate::ThemeStyled as _;
 
 /// Set when the platform draws the touch selection UI of a focused input.
 #[derive(Default)]
@@ -159,6 +159,9 @@ pub struct Input {
     /// If set, this overrides the built-in context menu.
     context_menu_builder: Option<Rc<dyn Fn(NativeMenu, &mut Window, &mut App) -> NativeMenu>>,
 
+    /// What draws the right-click menu, when this input chose.
+    context_menu_style: Option<ContextMenuStyle>,
+
     /// An optional paste handler. If set, it is invoked with the clipboard item
     /// before the default text insertion. Return `true` if handled.
     paste_handler: Option<Rc<dyn Fn(&gpui::ClipboardItem, &mut Window, &mut App) -> bool>>,
@@ -266,6 +269,7 @@ impl Input {
             accessibility_id: None,
             aria_label: None,
             context_menu_builder: None,
+            context_menu_style: None,
             paste_handler: None,
             token_renderer: None,
             token_click_listener: None,
@@ -394,6 +398,16 @@ impl Input {
         f: impl Fn(NativeMenu, &mut Window, &mut App) -> NativeMenu + 'static,
     ) -> Self {
         self.context_menu_builder = Some(Rc::new(f));
+        self
+    }
+
+    /// What draws the right-click menu: the operating system's menu on macOS
+    /// and Windows, the default, or GPUI's menu in the theme's colors with
+    /// [`ContextMenuStyle::Drawn`].
+    ///
+    /// Without it the input follows [`ContextMenuStyle::set_app_default`].
+    pub fn context_menu_style(mut self, style: ContextMenuStyle) -> Self {
+        self.context_menu_style = Some(style);
         self
     }
 
@@ -561,7 +575,11 @@ impl RenderOnce for Input {
         state.ensure_highlighter_factory(crate::highlighter::input_highlighter_factory(), cx);
         state.set_editor_style(
             gpui_base::input::InputEditorStyle {
-                foreground: cx.theme().foreground,
+                foreground: if state.presentation(cx).is_code_editor() {
+                    cx.theme().editor_foreground()
+                } else {
+                    cx.theme().foreground
+                },
                 muted_foreground: cx.theme().muted_foreground,
                 background: cx.theme().editor_background(),
                 border: cx.theme().border,
@@ -577,6 +595,13 @@ impl RenderOnce for Input {
                 editor_invisible: cx.theme().highlight_theme.style.editor_invisible,
                 editor_active_line: cx.theme().highlight_theme.style.editor_active_line,
                 editor_gutter_background: cx.theme().highlight_theme.style.editor_gutter_background,
+                editor_gutter_border: Some(cx.theme().editor_gutter_border()),
+                editor_line_number: cx.theme().highlight_theme.style.editor_line_number,
+                editor_active_line_number: cx
+                    .theme()
+                    .highlight_theme
+                    .style
+                    .editor_active_line_number,
                 fold_icon_renderer: Some(Rc::new(|ix, is_folded| {
                     Button::new(("fold-icon", ix))
                         .ghost()
@@ -615,6 +640,7 @@ impl RenderOnce for Input {
         state.set_readonly(self.readonly, cx);
         state.set_text_align(text_align, cx);
         let custom = self.context_menu_builder.clone();
+        let context_menu_style = self.context_menu_style;
         state.on_context_menu(
             Rc::new(move |_, capabilities, position, window, cx| {
                 let menu = if let Some(custom) = custom.as_ref() {
@@ -663,7 +689,9 @@ impl RenderOnce for Input {
                         Box::new(gpui_base::input::SelectAll),
                     )
                 };
-                menu.show(position, window, cx);
+                // Read as the menu opens, so a default the application sets
+                // later reaches inputs drawn before.
+                ContextMenuStyle::resolve(context_menu_style, cx).show(menu, position, window, cx);
             }),
             cx,
         );
@@ -805,10 +833,13 @@ impl RenderOnce for Input {
             })
             .items_center()
             .gap(gap_x)
+            .when(presentation.is_code_editor(), |this| {
+                this.text_color(cx.theme().editor_foreground())
+            })
             .refine_style(&self.style)
             .when(
                 focused && self.appearance && self.bordered && self.focus_bordered,
-                |this| this.focus_ring_style(window, cx),
+                |this| this.border_color(cx.theme().ring),
             )
             .children(prefix.map(|p| {
                 div()

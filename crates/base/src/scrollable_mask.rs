@@ -1463,6 +1463,9 @@ mod tests {
             delta,
             ..Default::default()
         });
+        // GPUI eases a notched wheel over 80 ms; let it land in the scroller.
+        cx.executor()
+            .advance_clock(std::time::Duration::from_millis(100));
         cx.update(|window, cx| window.draw(cx).clear(cx));
     }
 

@@ -9,12 +9,12 @@ Tooltip 用于在鼠标悬停或元素获得焦点时显示补充信息。它支
 
 ## 移动端行为
 
-iOS 和 Android 上会禁用由 GPUI Base overlay 管理的 tooltip。共享组件可以保留 tooltip 配置，但移动端操作仍应提供可见或可访问的标签。直接使用 GPUI `.tooltip()` 的调用（包括下方的基础 `div()` 示例）不经过此 overlay，因此不受该策略限制。集成方式请参阅[移动端](../docs/mobile.md)。
+iOS 和 Android 上会禁用由 Kit 管理的 Tooltip。移动端操作仍应提供可见或可访问的标签。GPUI 自带的 `.tooltip()` 不受该策略限制。自定义元素使用 `.managed_tooltip()` 即可遵循同样的策略。参阅[移动端](../docs/mobile.md)。
 
 ## 导入
 
 ```rust
-use gpui_kit::component::tooltip::Tooltip;
+use gpui_kit::component::tooltip::{ManagedTooltipExt as _, Tooltip};
 ```
 
 ## 用法
@@ -25,7 +25,7 @@ use gpui_kit::component::tooltip::Tooltip;
 div()
     .child("Hover me")
     .id("basic-tooltip")
-    .tooltip(|window, cx| {
+    .managed_tooltip(|window, cx| {
         Tooltip::new("This is a helpful tooltip").build(window, cx)
     })
 ```
@@ -58,7 +58,7 @@ Button::new("save-btn")
 div()
     .child("Hover for rich content")
     .id("rich-tooltip")
-    .tooltip(|window, cx| {
+    .managed_tooltip(|window, cx| {
         Tooltip::element(|_, cx| {
             h_flex()
                 .gap_x_1()
@@ -85,7 +85,7 @@ div()
 div()
     .child("Custom keybinding")
     .id("custom-kb")
-    .tooltip(|window, cx| {
+    .managed_tooltip(|window, cx| {
         Tooltip::new("Delete item")
             .key_binding(Some(Kbd::new("Delete")))
             .build(window, cx)
@@ -94,9 +94,9 @@ div()
 
 ## 显示时机
 
-组件自带的 Tooltip（例如通过 `Button::tooltip` 设置的）在指针停留于触发元素 500 ms 后出现。指针离开后，Tooltip 会再保留 300 ms 宽限期；在宽限期内移入另一个触发元素，会立即切换到它的 Tooltip，不再重新等待。
+组件自带的 Tooltip（例如通过 `Button::tooltip` 设置的）在指针停留于触发元素 500 ms 后出现。指针离开后，Tooltip 会再保留 300 ms 宽限期。
 
-如需在整个应用中调整这两个时长，安装一次 `TooltipDefaults` 即可。已打开的窗口会在下一次悬停时使用新值。
+如需在整个应用中调整这些时长，安装一次 `TooltipDefaults` 即可。已打开的窗口会在下一次悬停时使用新值。
 
 ```rust
 use std::time::Duration;
@@ -105,6 +105,7 @@ use gpui_kit::component::tooltip::TooltipDefaults;
 gpui_kit::init(cx);
 TooltipDefaults::new()
     .with_show_delay(Duration::from_millis(300))
+    .with_switch_delay(Duration::from_millis(50))
     .with_grace_period(Duration::from_millis(200))
     .install(cx);
 ```
@@ -118,9 +119,41 @@ Button::new("help")
     .tooltip_show_delay(Duration::ZERO)
 ```
 
-宽限期由窗口内所有触发元素共享，不能按单个元素覆盖。直接调用 GPUI `.tooltip()` 的元素不受这些设置影响，请改用 GPUI 的 `.tooltip_show_delay()`。
+切换延迟和宽限期由窗口内所有触发元素共享，不能按单个元素覆盖，但某个触发元素的切换延迟不会超过它的显示延迟。直接调用 GPUI `.tooltip()` 的元素不受这些设置影响，请改用 GPUI 的 `.tooltip_show_delay()`。
+
+### 在 Tooltip 之间移动
+
+有 Tooltip 显示时，以及指针离开所有带 Tooltip 的元素后的宽限期内，指针在另一个元素上停留 100 ms 的切换延迟，它的 Tooltip 就会取而代之。指针快速扫过一排按钮时，已显示的 Tooltip 保持原样，不会逐个闪现每个按钮的 Tooltip。把切换延迟设为 `Duration::ZERO`，指针一移入下一个按钮就会切换。
+
+在同一行上两个用 `Tooltip` 构建的 Tooltip 之间切换时，提示框会从一个移动并缩放到另一个，新文字停在自己的位置，随着提示框移动逐渐显露出来。开启减少动态效果时，提示框不会移动，新的 Tooltip 立即取代旧的。
+
+### 触发元素消失时
+
+托管 Tooltip 属于它所说明的元素。该元素不再绘制时，Tooltip 在同一帧消失，仍在等待显示延迟的 Tooltip 则不会出现。例如：
+
+- 点击“关闭”按钮后，按钮所在的页面随之关闭。
+- 指针停在某一行的操作按钮上时，快捷键删除了这一行。
+- 列表重新渲染，指针下的那一行不再存在。
+
+GPUI 沿用上一帧的视图中的触发元素，在指针停留其上时算作已绘制。指针离开后，无论窗口中其他部分如何重绘，Tooltip 都会保留到宽限期结束，或者被下一个按钮的 Tooltip 取代。这一行为无需任何设置。
+
+### 菜单打开时
+
+`dropdown_menu`、`Popover`、`HoverCard` 或 `context_menu` 打开期间，它的触发元素以及触发元素内的所有元素都不显示 Tooltip，因此不会有 Tooltip 遮住菜单。菜单打开时，已经显示的 Tooltip 随之隐藏。指针离开触发元素后再移回来，在菜单关闭之前也不会显示 Tooltip。菜单关闭后，悬停时照常显示。菜单或 Popover 内部元素的 Tooltip 仍然正常显示。`ContextMenuLayer` 打开菜单时会隐藏已显示的 Tooltip。
 
 ## API 参考
+
+### ManagedTooltipExt
+
+为树标题等自定义元素导入 `ManagedTooltipExt`。先为 `div` 设置 id，再添加托管 Tooltip，即可遵循与 Button Tooltip 相同的显示时机、生命周期和菜单打开时的隐藏规则。
+
+| 方法 | 说明 |
+| --- | --- |
+| `managed_tooltip(builder)` | 自动选择位置 |
+| `managed_tooltip_at(placement, builder)` | 优先使用窗口内可容纳的指定位置 |
+| `managed_tooltip_with(placement, show_delay, builder)` | 接受可选的首选位置和显示延迟 |
+
+构建器返回 `AnyView`，通常由 `Tooltip::build` 创建。
 
 ### Tooltip
 

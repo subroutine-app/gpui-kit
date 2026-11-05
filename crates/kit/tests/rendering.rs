@@ -1006,6 +1006,75 @@ mod rendering {
         }
     }
 
+    /// A content filter from the vendored backend (`vendor/README.md`): an element's painted
+    /// content fades to transparent across each banded edge and is clipped to its bounds.
+    #[cfg(not(feature = "gpui-fast"))]
+    struct Faded;
+    #[cfg(not(feature = "gpui-fast"))]
+    impl Render for Faded {
+        fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+            div().size_full().bg(gpui_kit::rgb(0xff0000)).child(
+                div()
+                    .absolute()
+                    .left(px(20.))
+                    .top(px(20.))
+                    .w(px(160.))
+                    .h(px(60.))
+                    .bg(gpui_kit::rgb(0x0000ff))
+                    .fade_edges(gpui_kit::Edges {
+                        top: px(20.),
+                        left: px(40.),
+                        ..Default::default()
+                    })
+                    // Overflows the faded element's bottom edge.
+                    .child(
+                        div()
+                            .absolute()
+                            .left(px(100.))
+                            .top(px(40.))
+                            .w(px(40.))
+                            .h(px(60.))
+                            .bg(gpui_kit::rgb(0x00ff00)),
+                    ),
+            )
+        }
+    }
+
+    #[cfg(not(feature = "gpui-fast"))]
+    fn fade_edges_fades_content_to_transparent_within_its_bounds() {
+        let mut cx = context(Arc::new(Assets));
+        let handle = open_window(&mut cx, (200., 100.), |_, _| Faded);
+        let capture = Capture::take(&mut cx, handle);
+        // The fraction of blue over the red window: 0 where the element is fully faded.
+        let blue = |x: f32, y: f32| {
+            let [r, _, b] = capture.get_pixel(capture.device(px(x)), capture.device(px(y)));
+            assert!(
+                (r + b - 255).abs() <= 6,
+                "({x}, {y}) is not a red/blue mix: {r}, {b}"
+            );
+            b as f32 / 255.
+        };
+        let assert_near = |actual: f32, expected: f32, at: &str| {
+            assert!(
+                (actual - expected).abs() <= 0.06,
+                "{at}: {actual} != {expected}"
+            );
+        };
+        assert_near(blue(100., 60.), 1., "inside, past both bands");
+        assert_near(blue(100., 20.25), 0., "the top edge");
+        assert_near(blue(100., 30.), 0.5, "half way through the top band");
+        assert_near(blue(40., 60.), 0.5, "half way through the left band");
+        assert_near(blue(30., 30.), 0.125, "where the bands multiply");
+        assert_near(blue(175., 60.), 1., "the unbanded right edge stays sharp");
+        let [r, g, b] = capture.get_pixel(capture.device(px(140.)), capture.device(px(70.)));
+        assert!(
+            g > 240 && r < 15 && b < 15,
+            "a child inside the bounds is unfaded"
+        );
+        let [r, g, _] = capture.get_pixel(capture.device(px(140.)), capture.device(px(90.)));
+        assert!(r > 240 && g < 15, "a child past the bounds is clipped");
+    }
+
     pub fn run() {
         println!("running pixels_detect_missing_check_even_when_checked_state_is_correct");
         pixels_detect_missing_check_even_when_checked_state_is_correct();
@@ -1043,6 +1112,12 @@ mod rendering {
             table_shows_keyboard_focus_only(focus_ring);
             println!("passed table_shows_keyboard_focus_only (focus_ring = {focus_ring})");
         }
-        println!("rendering: 13 passed (real offscreen renderer)");
+        #[cfg(not(feature = "gpui-fast"))]
+        {
+            println!("running fade_edges_fades_content_to_transparent_within_its_bounds");
+            fade_edges_fades_content_to_transparent_within_its_bounds();
+            println!("passed fade_edges_fades_content_to_transparent_within_its_bounds");
+        }
+        println!("rendering: passed (real offscreen renderer)");
     }
 }
