@@ -511,6 +511,10 @@ alternatives support deeper widgets:
 - `viewport_from_layout` uses same-frame layout bounds, as DataTable does when
   excluding fixed headers and columns.
 
+`track_inset` moves only the tracks inside the resolved viewport; the scroll
+range still follows the whole viewport. Command uses it to keep its thumb in
+line with a padded list's first and last rows.
+
 VirtualList owns variable-size item layout, visible-range calculation, content
 masking, deferred scroll-to-item requests, and clamped offsets. The caller owns
 item sizes and renders only the requested range. Tree builds on GPUI's uniform

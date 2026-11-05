@@ -40,7 +40,7 @@ Base 不附带产品动画。默认仅有 2 秒行为性空闲等待，进入、
 
 ## 自定义视口与句柄
 
-默认视口来自 `ScrollbarHandle::viewport_bounds`。组合控件可用 `.viewport_bounds(bounds)` 指定绘制视口，或 `.viewport_from_layout()` 使用覆盖层布局；只有句柄无法报告完整范围时才用 `.scroll_size(...)` 覆盖内容尺寸。`ScrollHandle`、`UniformListScrollHandle` 和 `ListState` 已实现 `ScrollbarHandle`；自定义容器需实现视口、偏移、设置偏移和内容尺寸，必要时实现 `start_drag` / `end_drag`。
+默认视口来自 `ScrollbarHandle::viewport_bounds`。组合控件可用 `.viewport_bounds(bounds)` 指定绘制视口，或 `.viewport_from_layout()` 使用覆盖层布局；`.track_inset(edges)` 只把滚动条轨道从视口边缘内缩（例如让滑块与带内边距列表的首末行对齐，或避开圆角），滚动范围仍按整个视口计算；只有句柄无法报告完整范围时才用 `.scroll_size(...)` 覆盖内容尺寸。`ScrollHandle`、`UniformListScrollHandle` 和 `ListState` 已实现 `ScrollbarHandle`；自定义容器需实现视口、偏移、设置偏移和内容尺寸，必要时实现 `start_drag` / `end_drag`。
 
 ## 稳定身份
 

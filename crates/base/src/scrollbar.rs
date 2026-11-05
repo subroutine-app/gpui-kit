@@ -890,6 +890,7 @@ pub struct Scrollbar {
     // Scroll range may use a smaller viewport than the padded track bounds.
     scroll_viewport_size: Option<Size<Pixels>>,
     use_layout_bounds: bool,
+    track_inset: Edges<Pixels>,
     /// Maximum frames per second for scrolling by drag. Default is 120 FPS.
     ///
     /// This is used to limit the update rate of the scrollbar when it is
@@ -915,6 +916,7 @@ impl Scrollbar {
             viewport_bounds: None,
             scroll_viewport_size: None,
             use_layout_bounds: false,
+            track_inset: Edges::default(),
             styles: ScrollbarStyles::default(),
         }
     }
@@ -979,6 +981,26 @@ impl Scrollbar {
     pub fn viewport_from_layout(mut self) -> Self {
         self.use_layout_bounds = true;
         self
+    }
+
+    /// Inset the tracks from the edges of the viewport they overlay, default:
+    /// none.
+    ///
+    /// Only the tracks move: the scroll range still follows the whole
+    /// viewport, and hovering anywhere in it still reveals the scrollbar. Use
+    /// it to keep a thumb within a scroll area's padding, such as in line with
+    /// the first and last rows of a padded list, or clear of a rounded corner.
+    pub fn track_inset(mut self, inset: impl Into<Edges<Pixels>>) -> Self {
+        self.track_inset = inset.into();
+        self
+    }
+
+    fn track_bounds(&self, viewport: Bounds<Pixels>) -> Bounds<Pixels> {
+        let track = viewport.extend(self.track_inset.map(|edge| -*edge));
+        Bounds {
+            size: track.size.max(&Size::default()),
+            ..track
+        }
     }
 
     fn resolved_viewport_bounds(&self, layout_bounds: Bounds<Pixels>) -> Bounds<Pixels> {
@@ -1613,6 +1635,7 @@ impl Element for Scrollbar {
             .scroll_size
             .unwrap_or(self.scroll_handle.content_size());
         let scroll_viewport_size = self.scroll_viewport_size.unwrap_or(hitbox.size);
+        let track = self.track_bounds(hitbox.bounds);
 
         for axis in self.axis.all().into_iter() {
             let is_vertical = axis.is_vertical();
@@ -1626,14 +1649,14 @@ impl Element for Scrollbar {
                 if is_vertical {
                     (
                         scroll_size.height,
-                        hitbox.size.height,
+                        track.size.height,
                         scroll_viewport_size.height,
                         self.scroll_handle.offset().y,
                     )
                 } else {
                     (
                         scroll_size.width,
-                        hitbox.size.width,
+                        track.size.width,
                         scroll_viewport_size.width,
                         self.scroll_handle.offset().x,
                     )
@@ -1655,23 +1678,23 @@ impl Element for Scrollbar {
             let bounds = Bounds {
                 origin: if is_vertical {
                     point(
-                        hitbox.origin.x + hitbox.size.width - track_width,
-                        hitbox.origin.y,
+                        track.origin.x + track.size.width - track_width,
+                        track.origin.y,
                     )
                 } else {
                     point(
-                        hitbox.origin.x,
-                        hitbox.origin.y + hitbox.size.height - track_width,
+                        track.origin.x,
+                        track.origin.y + track.size.height - track_width,
                     )
                 },
                 size: gpui::Size {
                     width: if is_vertical {
                         track_width
                     } else {
-                        hitbox.size.width
+                        track.size.width
                     },
                     height: if is_vertical {
-                        hitbox.size.height
+                        track.size.height
                     } else {
                         track_width
                     },
@@ -2576,6 +2599,53 @@ mod tests {
         });
         cx.update(|window, cx| window.draw(cx).clear(cx));
         (cx, handle)
+    }
+
+    #[gpui::test]
+    fn an_inset_track_still_spans_the_whole_scroll_range(cx: &mut TestAppContext) {
+        struct InsetHarness(TestHandle);
+
+        impl Render for InsetHarness {
+            fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+                div().relative().size(px(100.)).child(
+                    Scrollbar::vertical(&self.0)
+                        .mode(ScrollbarMode::Always)
+                        .track_inset(Edges {
+                            bottom: px(20.),
+                            ..Edges::default()
+                        }),
+                )
+            }
+        }
+
+        let handle = TestHandle::new(size(px(100.), px(200.)));
+        let (_, cx) = cx.add_window_view({
+            let handle = handle.clone();
+            move |_, _| InsetHarness(handle)
+        });
+        cx.update(|window, cx| window.draw(cx).clear(cx));
+
+        // An 80 px track with a 40 px thumb leaves it 40 px of travel, which
+        // must cover the full 100 px the 100 px viewport scrolls over 200 px.
+        cx.simulate_mouse_down(
+            point(px(95.), px(20.)),
+            MouseButton::Left,
+            Modifiers::default(),
+        );
+        cx.update(|window, cx| window.draw(cx).clear(cx));
+        cx.simulate_mouse_move(
+            point(px(95.), px(60.)),
+            Some(MouseButton::Left),
+            Modifiers::default(),
+        );
+        cx.update(|window, cx| window.draw(cx).clear(cx));
+        cx.simulate_mouse_up(
+            point(px(95.), px(60.)),
+            MouseButton::Left,
+            Modifiers::default(),
+        );
+
+        assert_eq!(handle.offset().y, px(-100.));
     }
 
     #[gpui::test]

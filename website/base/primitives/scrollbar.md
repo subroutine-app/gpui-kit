@@ -245,6 +245,20 @@ layout bounds. Use `viewport_from_layout` when a positioned overlay container
 already represents the exact viewport, such as a table body below a fixed
 header.
 
+Inset the tracks when the thumb should stay inside the viewport's padding,
+such as in line with the first and last rows of a padded list or clear of a
+rounded corner. Only the tracks move: the scroll range still follows the whole
+viewport.
+
+```rust
+Scrollbar::vertical(&scroll_handle)
+    .viewport_from_layout()
+    .track_inset(Edges {
+        bottom: px(8.),
+        ..Edges::default()
+    });
+```
+
 Override the content size only when the handle cannot report the complete
 scrollable extent:
 
