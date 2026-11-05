@@ -39,8 +39,11 @@ members = [
     "examples/markdown_table",
     "examples/ai_recipes",
     "examples/speech",
+    "examples/backdrop_blur",
+    "examples/scroll_fade",
     "crates/shell",
 ]
+exclude = ["vendor"]
 resolver = "2"
 
 [workspace.package]
@@ -120,6 +123,15 @@ errno = { version = "0.3.14", default-features = false }
 [workspace.dependencies.windows]
 features = ["Wdk", "Wdk_System", "Wdk_System_SystemServices"]
 version = "0.58.0"
+
+# The pre backend's renderer is vendored to add in-scene backdrop blur and
+# content filters. Patches only apply at a workspace root, so an application
+# depending on gpui-kit must repeat these entries; see `vendor/README.md`.
+[patch.crates-io]
+gpui-pre = { path = "vendor/gpui-pre" }
+gpui-pre-apple = { path = "vendor/gpui-pre-apple" }
+gpui-pre-wgpu = { path = "vendor/gpui-pre-wgpu" }
+gpui-pre-windows = { path = "vendor/gpui-pre-windows" }
 
 [workspace.lints.clippy]
 almost_complete_range = "allow"

@@ -1,0 +1,12 @@
+[package]
+name = "backdrop_blur"
+description = "Frosted-glass panels drawn with the vendored GPUI backdrop blur."
+version = "0.9.0"
+publish = false
+edition.workspace = true
+
+[dependencies]
+gpui-kit.workspace = true
+
+[lints]
+workspace = true

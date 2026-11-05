@@ -18,6 +18,8 @@ not enable the gallery's test-support development dependency.
 | Streaming Markdown | `cargo run -p example-stream-markdown` |
 | Text selection | `cargo run -p text_selection` |
 | Touch selection | `cargo run -p touch_selection` |
+| Backdrop blur (vendored GPUI renderer, see `vendor/README.md`) | `cargo run -p backdrop_blur` |
+| Edge-faded lists with smooth wheel and animated scrolling (vendored GPUI, see `vendor/README.md`) | `cargo run -p scroll_fade` |
 
 Shared sample documents live in `fixtures/`.
 
