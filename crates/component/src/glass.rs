@@ -360,6 +360,18 @@ fn backdrop<T: Styled>(element: T, _: Option<Pixels>) -> T {
     element
 }
 
+/// Glass painted inside `element` blurs the page as it was before `element`
+/// painted, so a scrim `element` draws under the glass stays out of the blur.
+#[cfg(not(feature = "gpui-fast"))]
+pub(crate) fn backdrop_snapshot<T: Styled>(element: T) -> T {
+    element.backdrop_snapshot()
+}
+
+#[cfg(feature = "gpui-fast")]
+pub(crate) fn backdrop_snapshot<T: Styled>(element: T) -> T {
+    element
+}
+
 /// A ring of `width` just inside the element's edge. An inset shadow is
 /// clipped to the element, so it paints over the fill and never under it.
 fn inner_ring(color: Hsla, width: Pixels) -> BoxShadow {

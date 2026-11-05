@@ -41,6 +41,12 @@ mod environment;
 #[cfg(feature = "test-support")]
 mod event_helpers;
 mod exports;
+#[cfg(all(
+    feature = "test-support",
+    feature = "component",
+    not(feature = "gpui-fast")
+))]
+mod glass;
 #[cfg(all(feature = "test-support", feature = "component"))]
 mod input;
 #[cfg(all(feature = "test-support", feature = "component"))]

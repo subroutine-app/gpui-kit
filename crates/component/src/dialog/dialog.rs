@@ -17,6 +17,7 @@ use crate::{
     animation::cubic_bezier,
     button::{Button, ButtonVariant, ButtonVariants as _},
     dialog::{DialogContent, DialogDispatchAnchor, DialogTitle},
+    glass,
     scroll::ScrollableElement as _,
     v_flex,
 };
@@ -296,6 +297,15 @@ impl IntoElement for BaseDialogRoot {
         match self {
             Self::Dialog(root) => root.into_element(),
             Self::AlertDialog(root) => root.into_element(),
+        }
+    }
+}
+
+impl Styled for BaseDialogRoot {
+    fn style(&mut self) -> &mut StyleRefinement {
+        match self {
+            Self::Dialog(root) => root.style(),
+            Self::AlertDialog(root) => root.style(),
         }
     }
 }
@@ -725,9 +735,6 @@ impl RenderOnce for Dialog {
                     .when(!closing, |this| this.occlude())
                     .w(view_size.width)
                     .h(view_size.height)
-                    .when(fade_overlay, |this| {
-                        this.child(div().absolute().inset_0().bg(overlay_color(true, cx)))
-                    })
                     .child(
                         self.base
                             .take()
@@ -737,6 +744,9 @@ impl RenderOnce for Dialog {
                             .close_on_escape(self.props.keyboard && !closing)
                             .close_on_backdrop_press(self.props.overlay_closable && !closing)
                             .dismiss_below_y(TITLE_BAR_HEIGHT)
+                            // Glass on the surface blurs the page under the
+                            // scrim, not the scrim.
+                            .when(self.props.overlay_visible, glass::backdrop_snapshot)
                             .when(self.props.overlay && !closing, |this| {
                                 this.backdrop(
                                     div()
@@ -907,15 +917,30 @@ impl RenderOnce for Dialog {
                                             }
                                         }),
                                 )
-                                .when(
-                                    entrance == DialogEntrance::SlideDown,
-                                    |positioner| {
-                                        positioner.position(point(
-                                            window_paddings.left + x,
-                                            window_paddings.top + y * visibility,
-                                        ))
-                                    },
-                                ),
+                                .when(entrance == DialogEntrance::SlideDown, |positioner| {
+                                    positioner.position(point(
+                                        window_paddings.left + x,
+                                        window_paddings.top + y * visibility,
+                                    ))
+                                })
+                                .map(|positioner| {
+                                    // The exit's fading scrim takes no input, so it is
+                                    // not the host's backdrop, but it paints in the
+                                    // host, after its snapshot, like that backdrop.
+                                    div()
+                                        .absolute()
+                                        .inset_0()
+                                        .when(fade_overlay, |this| {
+                                            this.child(
+                                                div()
+                                                    .absolute()
+                                                    .inset_0()
+                                                    .bg(overlay_color(true, cx))
+                                                    .opacity(visibility),
+                                            )
+                                        })
+                                        .child(positioner)
+                                }),
                             ),
                     )
                     .opacity(visibility),

@@ -14,7 +14,7 @@ use crate::{
     ActiveTheme, IconName, Placement, Sizable, StyledExt as _, WindowExt as _,
     button::{Button, ButtonVariants as _},
     dialog::overlay_color,
-    h_flex,
+    glass, h_flex,
     scroll::ScrollableElement as _,
     title_bar::TITLE_BAR_HEIGHT,
     v_flex,
@@ -276,6 +276,8 @@ impl RenderOnce for Sheet {
             .left(frame_insets.left)
             .w(size.width)
             .h(size.height)
+            // Glass on the surface blurs the page under the scrim, not the scrim.
+            .when(self.overlay, glass::backdrop_snapshot)
             .focus_handle(self.focus_handle)
             .overlay_interactive(self.overlay)
             .overlay_closable(self.overlay && self.overlay_closable)

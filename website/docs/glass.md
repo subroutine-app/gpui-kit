@@ -58,6 +58,23 @@ The surface role decides the color laid over the blur, the text color on it, and
 
 The edge is an inset shadow, painted over the fill and clipped to the element. Drop shadows sit under the element and are part of what the blur samples, which darkens the glass slightly near its lower edge; keep elevation for surfaces that really float.
 
+## Glass under a scrim
+
+A glass dialog or sheet blurs the page beneath the scrim, not the scrim itself, so its fill keeps its contrast in a light theme. The Dialog, AlertDialog, and Sheet hosts record a backdrop snapshot before they paint the scrim, and a backdrop blur painted inside an element reads the nearest such snapshot instead of the live frame. Outside the glass, the scrim dims the page as before.
+
+A custom overlay does the same by calling `.backdrop_snapshot()` on the element that paints the scrim and contains the glass:
+
+```rust
+div()
+    .absolute()
+    .inset_0()
+    .bg(cx.theme().overlay)
+    .backdrop_snapshot()
+    .child(panel.glass(Glass::frosted(), cx))
+```
+
+What the element paints with `deferred` paints after it and blurs the live frame, and the scrim must be the element or a descendant painted before the glass. Under the `gpui-fast` backend there is no `backdrop_snapshot`, and glass is opaque there anyway.
+
 ## Text contrast
 
 By default glass raises its fill coverage until the surface's foreground keeps a 4.5:1 contrast over a uniform black or white region behind it — the worst case, which a blur does not soften. Frosted usually already covers enough; Liquid is raised in most themes. `Glass::protect_text_contrast(false)` uses the preset's coverage as is, for glass that carries only icons or large type, or whose caller has checked legibility against its real backdrop.

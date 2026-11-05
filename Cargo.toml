@@ -66,18 +66,18 @@ story = { path = "crates/story" }
 # this kit uses: backdrop blur and content filters, edge fades, eased wheel and
 # animated scrolling, held drags, paint animations and native macOS toolbars.
 # Its `docs/upstream.md` lists every change. Bump every crate to the same rev.
-gpui = { package = "mhr-gpui", git = "https://github.com/subroutine-app/gpui", rev = "23ee17142437f8bcec067c4e3bdaa046153df886" }
-gpui_platform = { package = "mhr-gpui-platform", git = "https://github.com/subroutine-app/gpui", rev = "23ee17142437f8bcec067c4e3bdaa046153df886", features = ["font-kit", "x11", "wayland", "runtime_shaders"] }
-gpui_web = { package = "mhr-gpui-web", git = "https://github.com/subroutine-app/gpui", rev = "23ee17142437f8bcec067c4e3bdaa046153df886" }
+gpui = { package = "mhr-gpui", git = "https://github.com/subroutine-app/gpui", rev = "b9393fa9d2e16784bc85a8e48f4b98ec2281f19a" }
+gpui_platform = { package = "mhr-gpui-platform", git = "https://github.com/subroutine-app/gpui", rev = "b9393fa9d2e16784bc85a8e48f4b98ec2281f19a", features = ["font-kit", "x11", "wayland", "runtime_shaders"] }
+gpui_web = { package = "mhr-gpui-web", git = "https://github.com/subroutine-app/gpui", rev = "b9393fa9d2e16784bc85a8e48f4b98ec2281f19a" }
 # Fast is optional; existing crates select it through their gpui-fast feature.
 # Explicit package fields make Cargo use these dependency keys as Rust crate names;
 # the packages declare the same library names as the pre backend.
 gpui-fast = { package = "gpui-fast", version = "0.1.13", features = ["windows-manifest-provided-by-host"] }
 gpui-fast-platform = { package = "gpui-fast-platform", version = "0.1.13", features = ["font-kit", "x11", "wayland", "runtime_shaders"] }
 gpui-fast-web = { package = "gpui-fast-web", version = "0.1.13" }
-gpui_macros = { package = "mhr-gpui-macros", git = "https://github.com/subroutine-app/gpui", rev = "23ee17142437f8bcec067c4e3bdaa046153df886" }
-reqwest_client = { package = "mhr-reqwest-client", git = "https://github.com/subroutine-app/gpui", rev = "23ee17142437f8bcec067c4e3bdaa046153df886" }
-sum-tree = { package = "mhr-sum-tree", git = "https://github.com/subroutine-app/gpui", rev = "23ee17142437f8bcec067c4e3bdaa046153df886" }
+gpui_macros = { package = "mhr-gpui-macros", git = "https://github.com/subroutine-app/gpui", rev = "b9393fa9d2e16784bc85a8e48f4b98ec2281f19a" }
+reqwest_client = { package = "mhr-reqwest-client", git = "https://github.com/subroutine-app/gpui", rev = "b9393fa9d2e16784bc85a8e48f4b98ec2281f19a" }
+sum-tree = { package = "mhr-sum-tree", git = "https://github.com/subroutine-app/gpui", rev = "b9393fa9d2e16784bc85a8e48f4b98ec2281f19a" }
 reqwest = { package = "gpui-pre-reqwest", version = "=0.12.15", default-features = false, features = [
     "charset",
     "http2",
